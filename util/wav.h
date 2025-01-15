@@ -4,6 +4,7 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
+#include <cstdint>
 
 // TODO: something better here that doesn't assume little-endian architecture
 template<bool littleEndian=true>
