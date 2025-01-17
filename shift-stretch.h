@@ -4,18 +4,16 @@
 #include "dsp/delay.h"
 #include "dsp/fft.h"
 #include <complex>
-#include <vector>
 
-#ifndef LOG_EXPR
-#	include <iostream>
-#	define LOG_EXPR(expr) std::cout << #expr << " = " << (expr) << std::endl;
-#endif
-
+int size[9];
+typedef enum {
+	BLOCK_BUFFERS=0, WINDOW=1, FFT_BUFFER, CHANNEL_SPECTRA, ENERGY, SMOOTHED_ENERGY, PREV_SPECTRA, NEW_SPECTRA, PREV_OUTPUT_ROTATIONS
+} Array_Names;
 class OverlapAddStretch {
 public:
-	using Sample = double;
+	typedef double Sample;
 
-	OverlapAddStretch(bool isSpectral=false) : isSpectral(isSpectral) {}
+	OverlapAddStretch() {}
 	
 	void configure(int channels, int blockSamples, int intervalSamples, int maxExtraInput=0) {
 		this->channels = channels;
@@ -25,20 +23,14 @@ public:
 
 		inputHistory.resize(channels, blockSamples + maxExtraInput);
 		summedOutput.resize(channels, blockSamples);
-		blockBuffers.resize(blockSamples*channels);
-		window.resize(blockSamples);
-		if (isSpectral) {
-			// Kaiser's a good window for spectral stuff, but not so great for time-domain
-			auto kaiser = signalsmith::windows::Kaiser::withBandwidth(blockSamples*1.0/intervalSamples, true);
-			kaiser.fill(window, blockSamples);
-		} else {
-			for (int i = 0; i < blockSamples; ++i) {
-				double r = (i + 0.5)/blockSamples;
-				window[i] = std::sin(r*M_PI); // sine window, becomes Hann when applied twice
-			}
-		}
+		size[BLOCK_BUFFERS]=blockSamples*channels;
+		size[WINDOW]=blockSamples;
+		blockBuffers=(Sample*)malloc(sizeof(Sample)*size[BLOCK_BUFFERS]);
+		window=(Sample*)malloc(sizeof(Sample)*size[WINDOW]);
+		auto kaiser = Kaiser::withBandwidth(blockSamples*1.0/intervalSamples, true);
+		kaiser.fill(window, blockSamples);
 		// Makes it add up nicely to 1 when applied twice
-		signalsmith::windows::forcePerfectReconstruction(window, blockSamples, intervalSamples);
+		forcePerfectReconstruction(window, blockSamples, intervalSamples);
 		
 		intervalCounter = 0;
 	}
@@ -129,7 +121,7 @@ protected:
 	double invTimeFactor = 1;
 	
 	Sample * channelBlock(int channel) {
-		return blockBuffers.data() + channel*blockSamples;
+		return &blockBuffers[channel*blockSamples];
 	}
 	
 	virtual void processBlock(int inputIntervalSamples) {
@@ -141,11 +133,10 @@ protected:
 		intervalCounter = intervalSamples - interval;
 	}
 private:
-	bool isSpectral;
 
 	// Multi-channel circular buffers
-	signalsmith::delay::MultiBuffer<Sample> inputHistory, summedOutput;
-	std::vector<Sample> blockBuffers, window;
+	MultiBuffer<Sample> inputHistory, summedOutput;
+	Sample* blockBuffers, *window;
 
 	// Unused input samples, which may be fractional
 	int maxSurplusInputSamples = 0;
@@ -155,18 +146,20 @@ private:
 
 class SpectralStretch : public OverlapAddStretch {
 public:
-	using Complex = std::complex<Sample>;
+	typedef std::complex<Sample> Complex;//using Complex = std::complex<Sample>;
 
-	SpectralStretch(bool kaiserWindow=true) : OverlapAddStretch(kaiserWindow) {}
+	SpectralStretch() : OverlapAddStretch() {}
 	
 	void configure(int channels, int blockSamples, int intervalSamples, double zeroPadding=1, int maxExtraInput=0) {
 		OverlapAddStretch::configure(channels, blockSamples, intervalSamples, maxExtraInput);
 		
 		mrfft.setFastSizeAbove(blockSamples*zeroPadding);
-		fftBuffer.resize(mrfft.size());
+		size[FFT_BUFFER]=mrfft.size();
+		fftBuffer=(Sample*)malloc(sizeof(Sample)*size[FFT_BUFFER]);
 		bandCount = mrfft.size()/2;
 		scalingFactor = 1.0/mrfft.size(); // the FFT round-trip scales things up, so we scale down again
-		channelSpectra.resize(bandCount*channels);
+		size[CHANNEL_SPECTRA]=bandCount*channels;
+		channelSpectra=(Complex*)malloc(sizeof(Complex)*size[CHANNEL_SPECTRA]);
 	}
 protected:
 	virtual void processSpectrum(int inputIntervalSamples) {
@@ -175,7 +168,7 @@ protected:
 	}
 
 	Complex * channelSpectrum(int channel) {
-		return channelSpectra.data() + channel*bandCount;
+		return &channelSpectra[channel*bandCount];
 	}
 
 	int bands() const {
@@ -194,6 +187,7 @@ protected:
 	void timeShiftPhases(Sample shiftSamples, Complex *output) const {
 		for (int b = 0; b < bandCount; ++b) {
 			Sample phase = bandToFreq(b)*shiftSamples*(-2*M_PI);
+
 			output[b] = {std::cos(phase), std::sin(phase)};
 		}
 	}
@@ -206,7 +200,7 @@ protected:
 				fftBuffer[i] = block[i];
 			}
 			// Zero-padding
-			for (int i = this->blockSamples; i < int(fftBuffer.size()); ++i) {
+			for (int i = this->blockSamples; i < size[FFT_BUFFER]; ++i) {
 				fftBuffer[i] = 0;
 			}
 			mrfft.fft(fftBuffer, spectrum);
@@ -236,31 +230,35 @@ protected:
 	}
 
 private:
-	signalsmith::fft::ModifiedRealFFT<Sample> mrfft{1};
+	ModifiedRealFFT<Sample> mrfft{1};
 	int bandCount = 0;
 	Sample scalingFactor = 1;
-	std::vector<Sample> fftBuffer;
-	std::vector<Complex> channelSpectra;
+	Sample* fftBuffer;
+	Complex* channelSpectra;
 };
 
 class SpectralCutStretch : public SpectralStretch {
 public:
-	SpectralCutStretch(bool fixedPhase) : fixedPhase(fixedPhase) {}
+	SpectralCutStretch() {}
 
 	void configure(int channels, int blockSamples, int intervalSamples, double zeroPadding=2, int maxExtraInput=0) {
 		SpectralStretch::configure(channels, blockSamples, intervalSamples, zeroPadding, maxExtraInput);
+		size[ENERGY]=size[SMOOTHED_ENERGY]=size[NEW_SPECTRA]=size[PREV_SPECTRA]=size[PREV_OUTPUT_ROTATIONS]=this->bands();
+		energy=(Sample*)malloc(sizeof(Sample)*this->bands());
+		smoothedEnergy=(Sample*)malloc(sizeof(Sample)*this->bands());
+		newSpectra=(Complex*)malloc(sizeof(Complex)*(this->bands()*channels));
+		prevSpectra=(Complex*)malloc(sizeof(Complex)*(this->bands()*channels));
+		prevOutputRotations=(Complex*)malloc(sizeof(Complex)*bands());
 		
-		energy.resize(this->bands());
-		smoothedEnergy.resize(this->bands());
-		newSpectra.resize(this->bands()*channels);
-		prevSpectra.resize(this->bands()*channels);
-		
-		prevOutputRotations.resize(bands());
-		timeShiftPhases(-intervalSamples, prevOutputRotations.data());
+		timeShiftPhases(-intervalSamples, prevOutputRotations);
 	}
 	
 	void reset() {
-		prevSpectra.assign(prevSpectra.size(), 0);
+		for(int i=0;i<size[PREV_SPECTRA];i++)
+		{
+			prevSpectra[i]=0;
+		}
+		//prevSpectra.assign(prevSpectra.size(), 0);
 	}
 
 	void setFreqFactor(double factor) {
@@ -332,17 +330,16 @@ protected:
 		}
 	}
 private:
-	bool fixedPhase;
 	double freqFactor = 1;
-	std::vector<Sample> energy, smoothedEnergy;
-	std::vector<Complex> newSpectra, prevSpectra;
+	Sample *energy, *smoothedEnergy;
+	Complex* newSpectra, *prevSpectra;
 	Complex * newChannelSpectrum(int channel) {
-		return newSpectra.data() + channel*this->bands();
+		return &newSpectra[channel*this->bands()];
 	}
 	Complex * prevChannelSpectrum(int channel) {
-		return prevSpectra.data() + channel*this->bands();
+		return &prevSpectra[channel*this->bands()];
 	}
-	std::vector<Complex> prevOutputRotations;
+	Complex* prevOutputRotations;
 	
 	// Copy a segment of the spectrum to the output spectrum, shifted in frequency
 	void copySegmentToNew(int segmentStart, int segmentEnd) {
@@ -358,24 +355,21 @@ private:
 		int binOffset = std::round(this->freqToBand(newCentreFreq) - binAverage);
 
 		Complex phaseShift = 1;
-		if (!fixedPhase) {
-			Complex phaseShiftSum = 0;
-			for (int c = 0; c < this->channels; ++c) {
-				Complex *spectrum = this->channelSpectrum(c);
-				Complex *prevSpectrum = prevChannelSpectrum(c);
-				for (int b = segmentStart; b < segmentEnd; ++b) {
-					int newB = b + binOffset;
-					if (newB > 0 && newB < this->bands()) {
-						phaseShiftSum += prevSpectrum[newB]*std::conj(spectrum[b]);
-					}
+		Complex phaseShiftSum = 0;
+		for (int c = 0; c < this->channels; ++c) {
+			Complex *spectrum = this->channelSpectrum(c);
+			Complex *prevSpectrum = prevChannelSpectrum(c);
+			for (int b = segmentStart; b < segmentEnd; ++b) {
+				int newB = b + binOffset;
+				if (newB > 0 && newB < this->bands()) {
+					phaseShiftSum += prevSpectrum[newB]*std::conj(spectrum[b]);
 				}
 			}
-			Sample norm = std::norm(phaseShiftSum);
-			if (norm > 0) {
-				phaseShift = phaseShiftSum/std::sqrt(norm);
-			}
 		}
-
+		Sample norm = std::norm(phaseShiftSum);
+		if (norm > 0) {
+			phaseShift = phaseShiftSum/std::sqrt(norm);
+		}
 		for (int c = 0; c < this->channels; ++c) {
 			Complex *spectrum = this->channelSpectrum(c);
 			Complex *newSpectrum = newChannelSpectrum(c);

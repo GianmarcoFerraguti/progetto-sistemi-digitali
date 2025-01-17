@@ -127,9 +127,11 @@ public:
 		if (!file.is_open()) return result = Result(Result::Code::IO_ERROR, "Failed to open file: " + filename);
 
 		// RIFF chunk
-		if (read32(file) != value_RIFF) return result = Result(Result::Code::FORMAT_ERROR, "Input is not a RIFF file");
+		if (read32(file) != value_RIFF) 
+			return result = Result(Result::Code::FORMAT_ERROR, "Input is not a RIFF file");
 		read32(file); // File length - we don't check this
-		if (read32(file) != value_WAVE) return result = Result(Result::Code::FORMAT_ERROR, "Input is not a plain WAVE file");
+		if (read32(file) != value_WAVE) 
+			return result = Result(Result::Code::FORMAT_ERROR, "Input is not a plain WAVE file");
 		
 		auto blockStart = file.tellg(); // start of the blocks - we will seek back to here periodically
 		bool hasFormat = false, hasData = false;

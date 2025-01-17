@@ -60,7 +60,7 @@ void processBlocks(Processor &processor, double stretchFactor) {
 	}
 }
 
-void program(char* inputFile, char* outputFile, double semitones) {
+void pitchShifter(char* inputFile, char* outputFile, double semitones) {
 	double timeFactor = 1, freqFactor = 1;
 	double blockMs = 80, overlapFactor = 4, searchMs = 10;
 	if (!inputWav.read(inputFile)) 
@@ -96,5 +96,5 @@ int main(int argc, char **argv) {
 		printf("Sintassi: %s <inputFile> <outputFile> <semitoni>\n",argv[0]);
 		exit(-1);
 	}
-	program(argv[1],argv[2],atof(argv[3]));
+	pitchShifter(argv[1],argv[2],atof(argv[3]));
 }
