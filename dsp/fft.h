@@ -1,64 +1,30 @@
-#include "./common.h"
-
 #ifndef SIGNALSMITH_FFT_V5
 #define SIGNALSMITH_FFT_V5
 
-#include "./perf.h"
-
 #include <vector>
 #include <complex>
-template <typename V>
-SIGNALSMITH_INLINE V complexReal(const std::complex<V> &c) {
-	return ((V*)(&c))[0];
-}
-template <typename V>
-SIGNALSMITH_INLINE V complexImag(const std::complex<V> &c) {
-	return ((V*)(&c))[1];
-}
+typedef std::complex<double> complex;
 
-// Complex multiplication has edge-cases around Inf/NaN - handling those properly makes std::complex non-inlineable, so we use our own
-template <bool conjugateSecond, typename V>
-SIGNALSMITH_INLINE std::complex<V> complexMul(const std::complex<V> &a, const std::complex<V> &b) {
-	V aReal = complexReal(a), aImag = complexImag(a);
-	V bReal = complexReal(b), bImag = complexImag(b);
-	return conjugateSecond ? std::complex<V>{
-		bReal*aReal + bImag*aImag,
-		bReal*aImag - bImag*aReal
-	} : std::complex<V>{
-		aReal*bReal - aImag*bImag,
-		aReal*bImag + aImag*bReal
+complex complexMul(bool conjugateSecond, const complex &a, const complex &b) {
+	return conjugateSecond ? complex{
+		b.real()*a.real() + b.imag()*a.imag(),
+		b.real()*a.imag() - b.imag()*a.real()
+	} : complex{
+		a.real()*b.real() - a.imag()*b.imag(),
+		a.real()*b.imag() + a.imag()*b.real()
 	};
 }
-template<bool flipped, typename V>
-SIGNALSMITH_INLINE std::complex<V> complexAddI(const std::complex<V> &a, const std::complex<V> &b) {
-	V aReal = complexReal(a), aImag = complexImag(a);
-	V bReal = complexReal(b), bImag = complexImag(b);
-	return flipped ? std::complex<V>{
-		aReal + bImag,
-		aImag - bReal
-	} : std::complex<V>{
-		aReal - bImag,
-		aImag + bReal
+complex complexAddI(bool flipped, const complex &a, const complex &b) {
+	return flipped ? complex{
+		a.real() + b.imag(),
+		a.imag() - b.real()
+	} : complex{
+		a.real() - b.imag(),
+		a.imag() + b.real()
 	};
 }
-
-// Use SFINAE to get an iterator from std::begin(), if supported - otherwise assume the value itself is an iterator
-template<typename T, typename=void>
-struct GetIterator {
-	static T get(const T &t) {
-		return t;
-	}
-};
-template<typename T>
-struct GetIterator<T, decltype((void)std::begin(std::declval<T>()))> {
-	static auto get(const T &t) -> decltype(std::begin(t)) {
-		return std::begin(t);
-	}
-};
 	
-template<typename V=double>
 class FFT {
-	using complex = std::complex<V>;
 	size_t _size;
 	std::vector<complex> workingVector;
 	
@@ -107,7 +73,7 @@ class FFT {
 			for (size_t i = 0; i < subLength; ++i) {
 				for (size_t f = 0; f < factor; ++f) {
 					double phase = 2*M_PI*i*f/length;
-					complex twiddle = {V(std::cos(phase)), V(-std::sin(phase))};
+					complex twiddle = {(std::cos(phase)), (-std::sin(phase))};
 					twiddleVector.push_back(twiddle);
 				}
 			}
@@ -158,45 +124,6 @@ class FFT {
 			}
 		}
 	}
-	
-	template<bool inverse, typename RandomAccessIterator>
-	SIGNALSMITH_INLINE void fftStep4(RandomAccessIterator &&origData, const Step &step) {
-		const size_t stride = step.innerRepeats;
-		const complex *origTwiddles = twiddleVector.data() + step.twiddleIndex;
-		
-		for (size_t outerRepeat = 0; outerRepeat < step.outerRepeats; ++outerRepeat) {
-			const complex* twiddles = origTwiddles;
-			for (RandomAccessIterator data = origData; data < origData + stride; ++data) {
-				complex A = data[0];
-				complex C = complexMul<inverse>(data[stride], twiddles[2]);
-				complex B = complexMul<inverse>(data[stride*2], twiddles[1]);
-				complex D = complexMul<inverse>(data[stride*3], twiddles[3]);
-					complex sumAC = A + C, sumBD = B + D;
-				complex diffAC = A - C, diffBD = B - D;
-					data[0] = sumAC + sumBD;
-				data[stride] = complexAddI<!inverse>(diffAC, diffBD);
-				data[stride*2] = sumAC - sumBD;
-				data[stride*3] = complexAddI<inverse>(diffAC, diffBD);
-					twiddles += 4;
-			}
-				origData += 4*stride;
-		}
-	}
-		
-	template<typename InputIterator, typename OutputIterator>
-	void permute(InputIterator input, OutputIterator data) {
-		for (auto pair : permutation) {
-			data[pair.from] = input[pair.to];
-		}
-	}
-
-	template<bool inverse, typename InputIterator, typename OutputIterator>
-	void run(InputIterator &&input, OutputIterator &&data) {
-		permute(input, data);
-		for (const Step &step : plan) {
-				fftStep4<inverse>(data + step.startIndex, step);
-		}
-	}
 
 	static bool validSize(size_t size) {
 		constexpr static bool filter[32] = {
@@ -239,37 +166,50 @@ class FFT {
 			return _size;
 		}
 
-		template<typename InputIterator, typename OutputIterator>
-		void fft(InputIterator &&input, OutputIterator &&output) {
-			auto inputIter = GetIterator<InputIterator>::get(input);
-			auto outputIter = GetIterator<OutputIterator>::get(output);
-			return run<false>(inputIter, outputIter);
+	void run(bool inverse, complex *input, complex *data) {
+		for(auto pair : permutation)
+		{
+			data[pair.from]=input[pair.to];
 		}
-
-		template<typename InputIterator, typename OutputIterator>
-		void ifft(InputIterator &&input, OutputIterator &&output) {
-			auto inputIter = GetIterator<InputIterator>::get(input);
-			auto outputIter = GetIterator<OutputIterator>::get(output);
-			return run<true>(inputIter, outputIter);
+		for (const Step &step : plan) {
+			const size_t stride = step.innerRepeats;
+			const complex *origTwiddles = twiddleVector.data() + step.twiddleIndex;
+			complex* origData = data + step.startIndex;
+			for (size_t outerRepeat = 0; outerRepeat < step.outerRepeats; ++outerRepeat) {
+				const complex* twiddles = origTwiddles;
+				for (complex* data = origData; data < origData + stride; ++data) {
+					complex A = data[0];
+					complex C = complexMul(inverse, data[stride], twiddles[2]);
+					complex B = complexMul(inverse, data[stride*2], twiddles[1]);
+					complex D = complexMul(inverse, data[stride*3], twiddles[3]);
+					complex sumAC = A + C, sumBD = B + D;
+					complex diffAC = A - C, diffBD = B - D;
+					data[0] = sumAC + sumBD;
+					data[stride] = complexAddI(!inverse,diffAC, diffBD);
+					data[stride*2] = sumAC - sumBD;
+					data[stride*3] = complexAddI(inverse, diffAC, diffBD);
+					twiddles += 4;
+				}
+				origData += 4*stride;
+			}
 		}
-	};
+	}
+};
 
-	struct FFTOptions {
-		static constexpr int halfFreqShift = 1;
-	};
+struct FFTOptions {
+	static constexpr int halfFreqShift = 1;
+};
 
-	template<typename V, int optionFlags=0>
-	class RealFFT {
-		static constexpr bool modified = (optionFlags&FFTOptions::halfFreqShift);
-
-		using complex = std::complex<V>;
-		std::vector<complex> complexBuffer1, complexBuffer2;
-		std::vector<complex> twiddlesMinusI;
-		std::vector<complex> modifiedRotations;
-		FFT<V> complexFft;
+class RealFFT {
+	static const int optionFlags=0;
+	static constexpr bool modified = (optionFlags&FFTOptions::halfFreqShift);
+	std::vector<complex> complexBuffer1, complexBuffer2;
+	std::vector<complex> twiddlesMinusI;
+	std::vector<complex> modifiedRotations;
+	FFT complexFft;
 	public:
 		static size_t fastSizeAbove(size_t size) {
-			return FFT<V>::fastSizeAbove((size + 1)/2)*2;
+			return FFT::fastSizeAbove((size + 1)/2)*2;
 		}
 
 		RealFFT(size_t size=0, int fastDirection=0) : complexFft(0) {
@@ -283,13 +223,13 @@ class FFT {
 			size_t hhSize = size/4 + 1;
 			twiddlesMinusI.resize(hhSize);
 			for (size_t i = 0; i < hhSize; ++i) {
-				V rotPhase = -2*M_PI*(modified ? i + 0.5 : i)/size;
+				double rotPhase = -2*M_PI*(modified ? i + 0.5 : i)/size;
 				twiddlesMinusI[i] = {std::sin(rotPhase), -std::cos(rotPhase)};
 			}
 			if (modified) {
 				modifiedRotations.resize(size/2);
 				for (size_t i = 0; i < size/2; ++i) {
-					V rotPhase = -2*M_PI*i/size;
+					double rotPhase = -2*M_PI*i/size;
 					modifiedRotations[i] = {std::cos(rotPhase), std::sin(rotPhase)};
 				}
 			}
@@ -303,18 +243,17 @@ class FFT {
 			return complexFft.size()*2;
 		}
 
-		template<typename InputIterator, typename OutputIterator>
-		void fft(InputIterator &&input, OutputIterator &&output) {
+		void fft(double *&input, complex *&output) {
 			size_t hSize = complexFft.size();
 			for (size_t i = 0; i < hSize; ++i) {
 				if (modified) {
-					complexBuffer1[i] = complexMul<false>({input[2*i], input[2*i + 1]}, modifiedRotations[i]);
+					complexBuffer1[i] = complexMul(false, {input[2*i], input[2*i + 1]}, modifiedRotations[i]);
 				} else {
 					complexBuffer1[i] = {input[2*i], input[2*i + 1]};
 				}
 			}
 			
-			complexFft.fft(complexBuffer1.data(), complexBuffer2.data());
+			complexFft.run(false, complexBuffer1.data(), complexBuffer2.data());
 			
 			if (!modified) output[0] = {
 				complexBuffer2[0].real() + complexBuffer2[0].imag(),
@@ -323,17 +262,15 @@ class FFT {
 			for (size_t i = modified ? 0 : 1; i <= hSize/2; ++i) {
 				size_t conjI = modified ? (hSize  - 1 - i) : (hSize - i);
 				
-				complex odd = (complexBuffer2[i] + conj(complexBuffer2[conjI]))*(V)0.5;
-				complex evenI = (complexBuffer2[i] - conj(complexBuffer2[conjI]))*(V)0.5;
-				complex evenRotMinusI = complexMul<false>(evenI, twiddlesMinusI[i]);
+				complex odd = (complexBuffer2[i] + conj(complexBuffer2[conjI]))*0.5;
+				complex evenI = (complexBuffer2[i] - conj(complexBuffer2[conjI]))*0.5;
+				complex evenRotMinusI = complexMul(false, evenI, twiddlesMinusI[i]);
 
 				output[i] = odd + evenRotMinusI;
 				output[conjI] = conj(odd - evenRotMinusI);
 			}
 		}
-
-		template<typename InputIterator, typename OutputIterator>
-		void ifft(InputIterator &&input, OutputIterator &&output) {
+		void ifft(complex *&input, double *&output) {
 			size_t hSize = complexFft.size();
 			if (!modified) complexBuffer1[0] = {
 				input[0].real() + input[0].imag(),
@@ -345,26 +282,21 @@ class FFT {
 
 				complex odd = v + conj(v2);
 				complex evenRotMinusI = v - conj(v2);
-				complex evenI = complexMul<true>(evenRotMinusI, twiddlesMinusI[i]);
+				complex evenI = complexMul(true, evenRotMinusI, twiddlesMinusI[i]);
 				
 				complexBuffer1[i] = odd + evenI;
 				complexBuffer1[conjI] = conj(odd - evenI);
 			}
 			
-			complexFft.ifft(complexBuffer1.data(), complexBuffer2.data());
+			complexFft.run(true, complexBuffer1.data(), complexBuffer2.data());
 			
 			for (size_t i = 0; i < hSize; ++i) {
 				complex v = complexBuffer2[i];
 				if (modified) 
-					v = complexMul<true>(v, modifiedRotations[i]);
+					v = complexMul(true,v, modifiedRotations[i]);
 				output[2*i] = v.real();
 				output[2*i + 1] = v.imag();
 			}
 		}
-	};
-
-	template<typename V>
-	struct ModifiedRealFFT : public RealFFT<V, FFTOptions::halfFreqShift> {
-		using RealFFT<V, FFTOptions::halfFreqShift>::RealFFT;
-	};
-#endif // include guard
+};
+#endif
