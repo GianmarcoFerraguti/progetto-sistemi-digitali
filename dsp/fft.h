@@ -202,10 +202,8 @@ struct FFTOptions {
 
 class RealFFT {
 	static const int optionFlags=0;
-	static constexpr bool modified = (optionFlags&FFTOptions::halfFreqShift);
 	std::vector<complex> complexBuffer1, complexBuffer2;
 	std::vector<complex> twiddlesMinusI;
-	std::vector<complex> modifiedRotations;
 	FFT complexFft;
 	public:
 		static size_t fastSizeAbove(size_t size) {
@@ -223,17 +221,9 @@ class RealFFT {
 			size_t hhSize = size/4 + 1;
 			twiddlesMinusI.resize(hhSize);
 			for (size_t i = 0; i < hhSize; ++i) {
-				double rotPhase = -2*M_PI*(modified ? i + 0.5 : i)/size;
+				double rotPhase = -2*M_PI*i/size;
 				twiddlesMinusI[i] = {std::sin(rotPhase), -std::cos(rotPhase)};
-			}
-			if (modified) {
-				modifiedRotations.resize(size/2);
-				for (size_t i = 0; i < size/2; ++i) {
-					double rotPhase = -2*M_PI*i/size;
-					modifiedRotations[i] = {std::cos(rotPhase), std::sin(rotPhase)};
-				}
-			}
-			
+			}			
 			return complexFft.setSize(size/2);
 		}
 		size_t setFastSizeAbove(size_t size) {
@@ -246,21 +236,16 @@ class RealFFT {
 		void fft(double *&input, complex *&output) {
 			size_t hSize = complexFft.size();
 			for (size_t i = 0; i < hSize; ++i) {
-				if (modified) {
-					complexBuffer1[i] = complexMul(false, {input[2*i], input[2*i + 1]}, modifiedRotations[i]);
-				} else {
-					complexBuffer1[i] = {input[2*i], input[2*i + 1]};
-				}
+				complexBuffer1[i] = {input[2*i], input[2*i + 1]};
 			}
 			
 			complexFft.run(false, complexBuffer1.data(), complexBuffer2.data());
-			
-			if (!modified) output[0] = {
+			output[0] = {
 				complexBuffer2[0].real() + complexBuffer2[0].imag(),
 				complexBuffer2[0].real() - complexBuffer2[0].imag()
 			};
-			for (size_t i = modified ? 0 : 1; i <= hSize/2; ++i) {
-				size_t conjI = modified ? (hSize  - 1 - i) : (hSize - i);
+			for (size_t i = 1; i <= hSize/2; ++i) {
+				size_t conjI = hSize - i;
 				
 				complex odd = (complexBuffer2[i] + conj(complexBuffer2[conjI]))*0.5;
 				complex evenI = (complexBuffer2[i] - conj(complexBuffer2[conjI]))*0.5;
@@ -272,12 +257,12 @@ class RealFFT {
 		}
 		void ifft(complex *&input, double *&output) {
 			size_t hSize = complexFft.size();
-			if (!modified) complexBuffer1[0] = {
+			complexBuffer1[0] = {
 				input[0].real() + input[0].imag(),
 				input[0].real() - input[0].imag()
 			};
-			for (size_t i = modified ? 0 : 1; i <= hSize/2; ++i) {
-				size_t conjI = modified ? (hSize  - 1 - i) : (hSize - i);
+			for (size_t i = 1; i <= hSize/2; ++i) {
+				size_t conjI = hSize - i;
 				complex v = input[i], v2 = input[conjI];
 
 				complex odd = v + conj(v2);
@@ -292,8 +277,6 @@ class RealFFT {
 			
 			for (size_t i = 0; i < hSize; ++i) {
 				complex v = complexBuffer2[i];
-				if (modified) 
-					v = complexMul(true,v, modifiedRotations[i]);
 				output[2*i] = v.real();
 				output[2*i + 1] = v.imag();
 			}
