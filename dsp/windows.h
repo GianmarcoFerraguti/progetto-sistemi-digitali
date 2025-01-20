@@ -24,11 +24,7 @@
 			return bandwidth + 8/((bandwidth + 3)*(bandwidth + 3)) + 0.25*std::max(3 - bandwidth, 0.0);
 		}
 	public:
-		/// Set up a Kaiser window with a given shape.  `beta` is `pi*alpha` (since there is ambiguity about shape parameters)
 		Kaiser(double beta) : beta(beta), invB0(1/bessel0(beta)) {}
-
-		/// @name Bandwidth methods
-		/// @{
 		static Kaiser withBandwidth(double bandwidth, bool heuristicOptimal=false) {
 			return Kaiser(bandwidthToBeta(bandwidth, heuristicOptimal));
 		}
@@ -94,7 +90,8 @@
 			return bw;
 		}
 		static double bandwidthToEnbw(double bandwidth, bool heuristicOptimal=false) {
-			if (heuristicOptimal) bandwidth = heuristicBandwidth(bandwidth);
+			if (heuristicOptimal) 
+				bandwidth = heuristicBandwidth(bandwidth);
 			double b2 = std::max<double>(bandwidth - 2, 0);
 			return 1 + b2*(0.2 + b2*(-0.005 + b2*(-0.000005 + b2*0.0000022)));
 		}
@@ -104,9 +101,8 @@
 			double arg = std::sqrt(1 - r*r);
 			return bessel0(beta*arg)*invB0;
 		}
-	
-		template<typename Data>
-		void fill(Data &&data, int size) const {
+
+		void fill(double *&data, int size) const { //Data = double *&
 			double invSize = 1.0/size;
 			for (int i = 0; i < size; ++i) {
 				double r = (2*i + 1)*invSize - 1;
@@ -115,9 +111,9 @@
 			}
 		}
 	};
-	template<typename Data>
-	void forcePerfectReconstruction(Data &&data, int windowLength, int interval) {
-		for (int i = 0; i < interval; ++i) {
+
+	void forcePerfectReconstruction(double *&data, int windowLength, int interval) {
+		for (int i = 0; i < interval; ++i) { //Data = double *&
 			double sum2 = 0;
 			for (int index = i; index < windowLength; index += interval) {
 				sum2 += data[index]*data[index];
