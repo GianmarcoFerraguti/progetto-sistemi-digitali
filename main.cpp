@@ -26,28 +26,27 @@ void pitchShifter(char* inputFile, char* outputFile, double semitones) {
 	int intervalSamples = int(blockSamples/overlapFactor);
 	SpectralCutStretch stretch; //Default constructor
 	stretch.configure(inputWav.channels, blockSamples, intervalSamples);
-	stretch.setTimeFactor(timeFactor);
-	stretch.setFreqFactor(freqFactor);
+	stretch.invTimeFactor=1/timeFactor;
+	stretch.freqFactor=freqFactor;
 
-	int channels = inputWav.channels;
 	int blockSize = 256;
-	
-	std::vector<std::vector<double>> inputBuffers(channels), outputBuffers(channels);
-	std::vector<double *> inputPointers(channels), outputPointers(channels);
-	for (auto &b : outputBuffers) 
-		b.resize(blockSize);
+	int inputSamples = int(std::ceil(blockSize*stretch.invTimeFactor - stretch.surplusInputSamples));
+	int channels = inputWav.channels;
+	double** inputBuffers, **outputBuffers, **inputPointers, **outputPointers;
+	inputBuffers=(double**)malloc(sizeof(double*)*channels);
+	outputBuffers=(double**)malloc(sizeof(double*)*channels);
+	for(int c=0; c<channels; c++)
+	{
+		outputBuffers[c]=(double*)malloc(sizeof(double)*blockSize);
+		inputBuffers[c]=(double*)malloc(sizeof(double)*inputSamples);
+	}
 	
 	outputWav.channels = inputWav.channels;
 	int inputOffset = 0, outputOffset = 0;
 	int inputLength = int(inputWav.length());
-	int totalLatency = std::round(stretch.inputLatency()*timeFactor + stretch.outputLatency());
+	int totalLatency = std::round(stretch.blockSamples/2*timeFactor + (blockSamples - blockSamples/2));
 	int outputLength = inputWav.length()*timeFactor;
 	while (outputOffset < outputLength + totalLatency*2) {
-		int inputSamples = int(std::ceil(blockSize*stretch.invTimeFactor - stretch.surplusInputSamples));
-		if (inputSamples > int(inputBuffers[0].size())) {
-			for (auto &b : inputBuffers) 
-				b.resize(inputSamples);
-		}
 		for (int c = 0; c < channels; ++c) {
 			for (int i = 0; i < inputSamples; ++i) {
 				if (inputOffset + i < inputLength) {
@@ -56,11 +55,9 @@ void pitchShifter(char* inputFile, char* outputFile, double semitones) {
 					inputBuffers[c][i] = 0;
 				}
 			}
-			inputPointers[c] = inputBuffers[c].data();
-			outputPointers[c] = outputBuffers[c].data();
 		}
 		
-		stretch.process(inputPointers.data(), inputSamples, outputPointers.data(), blockSize);
+		stretch.process(inputBuffers, inputSamples, outputBuffers, blockSize);
 		
 		outputWav.samples.resize((outputOffset + blockSize)*channels);
 		for (int c = 0; c < channels; ++c) {
@@ -72,6 +69,13 @@ void pitchShifter(char* inputFile, char* outputFile, double semitones) {
 		inputOffset += inputSamples;
 		outputOffset += blockSize;
 	}
+	for(int c=0; c<channels; c++)
+	{
+		free(outputBuffers[c]);
+		free(inputBuffers[c]);
+	}
+	free(outputBuffers);
+	free(inputBuffers);
 	endTime=__rdtsc();
 	printf("Tempo impiegato per l'elaborazione (in cicli di clock): %ld\n",(endTime-startTime));
 	if (!outputWav.write(outputFile)) 

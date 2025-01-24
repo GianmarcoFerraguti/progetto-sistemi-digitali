@@ -4,7 +4,7 @@
 #include <vector>
 #include <complex>
 typedef std::complex<double> Complex;
-
+//Due idee: ottimizzazione di questo codice oppure impiego al suo posto della libreria FFTW
 Complex complexMul(bool conjugateSecond, const Complex &a, const Complex &b) {
 	return conjugateSecond ? Complex{
 		b.real()*a.real() + b.imag()*a.imag(),
@@ -167,7 +167,7 @@ class FFT {
 		}
 
 	void run(bool inverse, Complex *input, Complex *data) {
-		for(auto pair : permutation)
+		for(PermutationPair pair : permutation)
 		{
 			data[pair.from]=input[pair.to];
 		}

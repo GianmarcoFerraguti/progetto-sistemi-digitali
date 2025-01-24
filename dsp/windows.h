@@ -26,6 +26,7 @@
 
 		static double bandwidthToBeta(double bandwidth, bool heuristicOptimal=false) {
 			if (heuristicOptimal) {
+				//Idea carina ma non essenziale: raggruppare alcuni termini della seguente espressione in un registro esteso in modo da calcolarli contemporanemante
 				bandwidth = bandwidth + 8/((bandwidth + 3)*(bandwidth + 3)) + 0.25*std::max(3 - bandwidth, 0.0); //heuristicBandwidth
 			}
 			bandwidth = std::max(bandwidth, 2.0);
@@ -35,6 +36,7 @@
 
 		void fill(double *&data, int size) const {
 			double invSize = 1.0/size;
+			//Si potrebbe riscrivere in SIMD
 			for (int i = 0; i < size; ++i) {
 				double r = (2*i + 1)*invSize - 1;
 				double arg = std::sqrt(1 - r*r);
@@ -44,6 +46,7 @@
 	};
 
 	void forcePerfectReconstruction(double *&data, int windowLength, int interval) {
+		//Si potrebbe riscrivere in SIMD
 		for (int i = 0; i < interval; ++i) {
 			double sum2 = 0;
 			for (int index = i; index < windowLength; index += interval) {

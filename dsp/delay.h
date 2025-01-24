@@ -1,32 +1,38 @@
 #ifndef SIGNALSMITH_DSP_DELAY_H
 #define SIGNALSMITH_DSP_DELAY_H
-
-#include <vector>
+#include <stdlib.h>
+//Riscrivere queste classi in modo meno OOP: togliere gli operatori, togliere la classe innestata View
 class Buffer {
-		unsigned int bufferIndex;
-		unsigned int bufferMask;
-		std::vector<double> buffer;
+		int bufferIndex;
+		int bufferMask;
+		int bufferLength; 
+		double* buffer;
 	public:
 		Buffer(int minCapacity=0) {
 			resize(minCapacity, 0);
 		}
-		// We shouldn't accidentally copy a delay buffer
-		Buffer(const Buffer &other) = delete;
-		Buffer & operator =(const Buffer &other) = delete;
 		// But moving one is fine
 		Buffer(Buffer &&other) = default;
 		Buffer & operator =(Buffer &&other) = default;
 
 		void resize(int minCapacity, double value=0) {
-			int bufferLength = 1;
+			bufferLength = 1;
 			while (bufferLength < minCapacity) 
 				bufferLength *= 2;
-			buffer.assign(bufferLength, value); //Replaces vector content and size
-			bufferMask = unsigned(bufferLength - 1);
+			buffer=(double*)malloc(sizeof(double)*bufferLength);
+			//Loop di assegnamento potenzialmente parallelizzabile in SIMD
+			for(int i=0;i<bufferLength; i++)
+				buffer[i]=value;
+			bufferMask = bufferLength - 1;
 			bufferIndex = 0;
 		}
 		void reset(double value) {
-			buffer.assign(buffer.size(), value);
+			if(buffer!=NULL)
+				free(buffer);
+			buffer=(double*)malloc(sizeof(double)*bufferLength);
+			//Idem come nel metodo precedente
+			for(int i=0;i<bufferLength; i++)
+				buffer[i]=value;
 		}
 
 		/// Holds a view for a particular position in the buffer
@@ -93,9 +99,9 @@ class Buffer {
 		}
 };
 class MultiBuffer {
+	public:
 		int channels, stride;
 		Buffer buffer;
-	public:
 
 		MultiBuffer(int channels=0, int capacity=0) : channels(channels), stride(capacity), buffer(channels*capacity) {}
 

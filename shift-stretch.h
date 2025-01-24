@@ -1,59 +1,82 @@
 #ifndef SIGNALSMITH_EXAMPLE_SHIFT_STRETCH_H
 #define SIGNALSMITH_EXAMPLE_SHIFT_STRETCH_H
-
+#define M_PI 3.14159265358979323846264338327950288
 #include "dsp/delay.h"
 #include "dsp/fft.h"
+#include "dsp/windows.h"
 #include <complex>
 
 int size[9];
 typedef enum {
 	BLOCK_BUFFERS=0, WINDOW=1, FFT_BUFFER, CHANNEL_SPECTRA, ENERGY, SMOOTHED_ENERGY, PREV_SPECTRA, NEW_SPECTRA, PREV_OUTPUT_ROTATIONS
 } Array_Names;
-class OverlapAddStretch {
+typedef std::complex<double> Complex;//using Complex = std::complex<Sample>;
+typedef Complex complex;
+RealFFT mrfft;
+class SpectralCutStretch {
 public:
-	typedef double Sample;
-
-	OverlapAddStretch() {}
+	int bandCount = 0;
+	double scalingFactor = 1;
+	int channels = 0, blockSamples = 0;
+	int intervalSamples = 0, intervalCounter = 0;
+	double invTimeFactor = 1;
 	
-	void configure(int channels, int blockSamples, int intervalSamples, int maxExtraInput=0) {
+	MultiBuffer inputHistory, summedOutput;
+	int maxSurplusInputSamples = 0;
+	double surplusInputSamples = 0;
+	int prevInputIndex = 0;
+
+	double freqFactor = 1;
+	double* fftBuffer;
+	double *energy, *smoothedEnergy;
+	double* blockBuffers, *window;
+	Complex* channelSpectra;
+	Complex* newSpectra, *prevSpectra;
+	Complex* prevOutputRotations;
+
+	SpectralCutStretch() {}
+
+	void configure(int channels, int blockSamples, int intervalSamples, double zeroPadding=2, int maxExtraInput=0) {
+		//Sono tutti e 4 interi a 32 bit: si potrebbero raggruppare in un registro esteso da 128 bit
 		this->channels = channels;
 		this->blockSamples = blockSamples;
 		this->intervalSamples = intervalSamples;
 		this->maxSurplusInputSamples = maxExtraInput;
 
-		inputHistory.resize(channels, blockSamples + maxExtraInput);
-		summedOutput.resize(channels, blockSamples);
+		inputHistory.resize(channels, blockSamples + maxExtraInput,0);
+		summedOutput.resize(channels, blockSamples,0);
 		size[BLOCK_BUFFERS]=blockSamples*channels;
 		size[WINDOW]=blockSamples;
-		blockBuffers=(Sample*)malloc(sizeof(Sample)*size[BLOCK_BUFFERS]);
-		window=(Sample*)malloc(sizeof(Sample)*size[WINDOW]);
-		auto kaiser = Kaiser::withBandwidth(blockSamples*1.0/intervalSamples, true);
+		blockBuffers=(double*)malloc(sizeof(double)*size[BLOCK_BUFFERS]);
+		window=(double*)malloc(sizeof(double)*size[WINDOW]);
+		Kaiser kaiser = Kaiser::withBandwidth(blockSamples*1.0/intervalSamples, true);
 		kaiser.fill(window, blockSamples);
 		// Makes it add up nicely to 1 when applied twice
 		forcePerfectReconstruction(window, blockSamples, intervalSamples);
-		
 		intervalCounter = 0;
+		mrfft.setFastSizeAbove(blockSamples*zeroPadding);
+		bandCount = mrfft.size()/2;
+		scalingFactor = 1.0/mrfft.size(); // the FFT round-trip scales things up, so we scale down again
+		size[FFT_BUFFER]=mrfft.size();
+		size[CHANNEL_SPECTRA]=bandCount*channels;
+		size[ENERGY]=size[SMOOTHED_ENERGY]=size[NEW_SPECTRA]=size[PREV_SPECTRA]=size[PREV_OUTPUT_ROTATIONS]=bandCount;
+		//Dove si possono deallocare? Quando non servono più o definendo un metodo finalize per dealloare tutto alla fine?
+		fftBuffer=(double*)malloc(sizeof(double)*size[FFT_BUFFER]);
+		channelSpectra=(Complex*)malloc(sizeof(Complex)*size[CHANNEL_SPECTRA]);
+		energy=(double*)malloc(sizeof(double)*bandCount);
+		smoothedEnergy=(double*)malloc(sizeof(double)*bandCount);
+		newSpectra=(Complex*)malloc(sizeof(Complex)*(bandCount*channels));
+		prevSpectra=(Complex*)malloc(sizeof(Complex)*(bandCount*channels));
+		prevOutputRotations=(Complex*)malloc(sizeof(Complex)*bandCount);
+
+		//Possibile parallelizzazione in SIMD: due celle per ciascun elemento, una per la parte reale e una per la parte immaginaria
+		for (int b = 0; b < bandCount; ++b) {
+			double phase = ((b+0.5f)/mrfft.size())*(-intervalSamples)*(-2*M_PI);
+			prevOutputRotations[b] = {std::cos(phase), std::sin(phase)};
+		}
 	}
 	
-	void reset() {
-		inputHistory.reset();
-		summedOutput.reset();
-		intervalCounter = 0;
-	}
-	
-	void setRate(double rate) {
-		invTimeFactor = rate;
-	}
-	void setTimeFactor(double timeFactor) {
-		invTimeFactor = 1/timeFactor;
-	}
-	/// How many input samples do we need to get this much output?
-	int samplesForOutput(int outputSamples) const {
-		double inputSamples = outputSamples*invTimeFactor - surplusInputSamples;
-		return int(std::ceil(inputSamples));
-	}
-	
-	void process(const Sample * const *inputs, int inputSamples, Sample **outputs, int outputSamples) {
+	void process(double** inputs, int inputSamples, double **outputs, int outputSamples) {
 		int inputFilledTo = 0;
 		for (int o = 0; o < outputSamples; ++o) {
 			if (++intervalCounter >= intervalSamples) {
@@ -62,15 +85,16 @@ public:
 				int inputStart = int(std::round(o*invTimeFactor - surplusInputSamples - blockSamples));
 				// For safety: don't go past the end of the block, or too far in the past
 				inputStart = std::max(std::min(inputStart, inputSamples - blockSamples), -maxSurplusInputSamples - blockSamples);
+				//Si potrebbe parallelizzare, ma prima occorre togliere l'OOP da delay.h e definire tutto in termini di tipi primitivi
 				for (int c = 0; c < channels; ++c) {
 					// Make sure we have enough input history
-					auto input = inputs[c];
-					auto history = inputHistory[c];
+					double* input = inputs[c];
+					Buffer::View history = inputHistory[c];
 					for (int i = inputFilledTo; i < inputStart + blockSamples; ++i) {
 						history[i] = input[i];
 					}
 					// Fill the block from history
-					Sample *blockBuffer = channelBlock(c);
+					double *blockBuffer = &blockBuffers[c*blockSamples];
 					for (int i = 0; i < blockSamples; ++i) {
 						blockBuffer[i] = history[inputStart + i]*window[i];
 					}
@@ -80,9 +104,10 @@ public:
 				prevInputIndex = inputStart;
 				
 				// Add the block to the summed output
+				//Potenzialmente parallelizzabile, a patto di sistemare delay.h come già detto
 				for (int c = 0; c < channels; ++c) {
-					Sample *blockBuffer = channelBlock(c);
-					auto output = summedOutput[c];
+					double *blockBuffer = &blockBuffers[c*blockSamples];
+					Buffer::View output = summedOutput[c];
 					for (int i = 0; i < blockSamples; ++i) {
 						output[i] += blockBuffer[i]*window[i];
 					}
@@ -97,8 +122,8 @@ public:
 		
 		// Copy in remaining input
 		for (int c = 0; c < channels; ++c) {
-			auto input = inputs[c];
-			auto history = inputHistory[c];
+			double* input = inputs[c];
+			Buffer::View history = inputHistory[c];
 			for (int i = inputFilledTo; i < inputSamples; ++i) {
 				history[i] = input[i];
 			}
@@ -107,95 +132,11 @@ public:
 		prevInputIndex -= inputSamples;
 		surplusInputSamples += inputSamples - outputSamples*invTimeFactor;
 	}
-	
-	int inputLatency() const {
-		return blockSamples/2;
-	}
-	int outputLatency() const {
-		return blockSamples - inputLatency();
-	}
 
-protected:
-	int channels = 0, blockSamples = 0;
-	int intervalSamples = 0, intervalCounter = 0;
-	double invTimeFactor = 1;
-	
-	Sample * channelBlock(int channel) {
-		return &blockBuffers[channel*blockSamples];
-	}
-	
-	virtual void processBlock(int inputIntervalSamples) {
-		// Alter the blocks (for each channel) if we want to
-		(void)inputIntervalSamples;
-	}
-
-	void scheduleNextBlock(int interval) {
-		intervalCounter = intervalSamples - interval;
-	}
-private:
-
-	// Multi-channel circular buffers
-	MultiBuffer<Sample> inputHistory, summedOutput;
-	Sample* blockBuffers, *window;
-
-	// Unused input samples, which may be fractional
-	int maxSurplusInputSamples = 0;
-	double surplusInputSamples = 0;
-	int prevInputIndex = 0;
-};
-
-class SpectralStretch : public OverlapAddStretch {
-public:
-	typedef std::complex<Sample> Complex;//using Complex = std::complex<Sample>;
-
-	SpectralStretch() : OverlapAddStretch() {}
-	
-	void configure(int channels, int blockSamples, int intervalSamples, double zeroPadding=1, int maxExtraInput=0) {
-		OverlapAddStretch::configure(channels, blockSamples, intervalSamples, maxExtraInput);
-		
-		mrfft.setFastSizeAbove(blockSamples*zeroPadding);
-		size[FFT_BUFFER]=mrfft.size();
-		fftBuffer=(Sample*)malloc(sizeof(Sample)*size[FFT_BUFFER]);
-		bandCount = mrfft.size()/2;
-		scalingFactor = 1.0/mrfft.size(); // the FFT round-trip scales things up, so we scale down again
-		size[CHANNEL_SPECTRA]=bandCount*channels;
-		channelSpectra=(Complex*)malloc(sizeof(Complex)*size[CHANNEL_SPECTRA]);
-	}
-protected:
-	virtual void processSpectrum(int inputIntervalSamples) {
-		// Edit the spectrums using `channelSpectrum()`, `bands()` and `bandToFreq()`/`freqToBand()`
-		(void)inputIntervalSamples;
-	}
-
-	Complex * channelSpectrum(int channel) {
-		return &channelSpectra[channel*bandCount];
-	}
-
-	int bands() const {
-		return bandCount;
-	}
-	int fftSize() const {
-		return int(mrfft.size());
-	}
-	Sample bandToFreq(Sample band) const {
-		return (band + 0.5f)/mrfft.size();
-	}
-	Sample freqToBand(Sample freq) const {
-		return freq*mrfft.size() - 0.5f;
-	}
-
-	void timeShiftPhases(Sample shiftSamples, Complex *output) const {
-		for (int b = 0; b < bandCount; ++b) {
-			Sample phase = bandToFreq(b)*shiftSamples*(-2*M_PI);
-
-			output[b] = {std::cos(phase), std::sin(phase)};
-		}
-	}
-
-	void processBlock(int inputIntervalSamples) override final {
+	void processBlock(int inputIntervalSamples) {
 		for (int c = 0; c < this->channels; ++c) {
-			Sample *block = this->channelBlock(c);
-			Complex *spectrum = channelSpectrum(c);
+			double *block = &blockBuffers[c*blockSamples];
+			Complex *spectrum = &channelSpectra[c*bandCount];
 			for (int i = 0; i < this->blockSamples; ++i) {
 				fftBuffer[i] = block[i];
 			}
@@ -209,8 +150,8 @@ protected:
 		processSpectrum(inputIntervalSamples);
 
 		for (int c = 0; c < this->channels; ++c) {
-			Sample *block = this->channelBlock(c);
-			Complex *spectrum = channelSpectrum(c);
+			double *block = &blockBuffers[c*blockSamples];
+			Complex *spectrum = &channelSpectra[c*bandCount];
 			mrfft.ifft(spectrum, fftBuffer);
 			for (int i = 0; i < this->blockSamples; ++i) {
 				block[i] = fftBuffer[i]*scalingFactor;
@@ -218,77 +159,30 @@ protected:
 		}
 	}
 
-	static Complex generateComplex(Sample energy, Complex complexPhase) {
-		Sample complexPhaseNorm = std::norm(complexPhase);
-		if (complexPhaseNorm > 0) {
-			return complexPhase*std::sqrt(energy/complexPhaseNorm);
-		} else {
-			Sample phase = Sample(2*M_PI)*rand()/RAND_MAX;
-			Complex complexPhase = {std::cos(phase), std::sin(phase)};
-			return std::sqrt(energy)*complexPhase;
-		}
-	}
-
-private:
-	ModifiedRealFFT<Sample> mrfft{1};
-	int bandCount = 0;
-	Sample scalingFactor = 1;
-	Sample* fftBuffer;
-	Complex* channelSpectra;
-};
-
-class SpectralCutStretch : public SpectralStretch {
-public:
-	SpectralCutStretch() {}
-
-	void configure(int channels, int blockSamples, int intervalSamples, double zeroPadding=2, int maxExtraInput=0) {
-		SpectralStretch::configure(channels, blockSamples, intervalSamples, zeroPadding, maxExtraInput);
-		size[ENERGY]=size[SMOOTHED_ENERGY]=size[NEW_SPECTRA]=size[PREV_SPECTRA]=size[PREV_OUTPUT_ROTATIONS]=this->bands();
-		energy=(Sample*)malloc(sizeof(Sample)*this->bands());
-		smoothedEnergy=(Sample*)malloc(sizeof(Sample)*this->bands());
-		newSpectra=(Complex*)malloc(sizeof(Complex)*(this->bands()*channels));
-		prevSpectra=(Complex*)malloc(sizeof(Complex)*(this->bands()*channels));
-		prevOutputRotations=(Complex*)malloc(sizeof(Complex)*bands());
-		
-		timeShiftPhases(-intervalSamples, prevOutputRotations);
-	}
-	
-	void reset() {
-		for(int i=0;i<size[PREV_SPECTRA];i++)
-		{
-			prevSpectra[i]=0;
-		}
-		//prevSpectra.assign(prevSpectra.size(), 0);
-	}
-
-	void setFreqFactor(double factor) {
-		freqFactor = factor;
-	}
-protected:
-	virtual void processSpectrum(int) {
-		for (int b = 0; b < this->bands(); ++b) {
-			Sample e = 0;
+	void processSpectrum(int inputIntervalSamples) {
+		for (int b = 0; b < bandCount; ++b) {
+			double e = 0;
 			for (int c = 0; c < this->channels; ++c) {
-				Complex bin = this->channelSpectrum(c)[b];
+				Complex bin = (channelSpectra+(c*bandCount))[b];
 				e += std::norm(bin); // magnitude squared
 			}
 			energy[b] = smoothedEnergy[b] = e;
 		}
 		
-		Sample smoothingFactor = 0.25; // Really this should depend on your overlap-ratio and stuff, but this whole thing's a bit approximate
-		Sample smooth = energy[0];
-		for (int b = 1; b < this->bands(); ++b) { // smooth upwards
+		double smoothingFactor = 0.25; // Really this should depend on your overlap-ratio and stuff, but this whole thing's a bit approximate
+		double smooth = energy[0];
+		for (int b = 1; b < bandCount; ++b) { // smooth upwards
 			smooth += (smoothedEnergy[b] - smooth)*smoothingFactor;
 			smoothedEnergy[b] = smooth;
 		}
-		for (int b = this->bands() - 1; b >= 0; --b) { // smooth downwards
+		for (int b = bandCount - 1; b >= 0; --b) { // smooth downwards
 			smooth += (smoothedEnergy[b] - smooth)*smoothingFactor;
 			smoothedEnergy[b] = smooth;
 		}
 		
 		int binIndex = 0;
 		int prevSegmentStart = 0, prevSegmentEnd = 0;
-		while (binIndex < this->bands()) {
+		while (binIndex < bandCount) {
 			if (energy[binIndex] > smoothedEnergy[binIndex]) {
 				if (prevSegmentEnd > 0) { // if it's not the first segment
 					// backtrack until it's 6dB below the smoothed energy
@@ -296,17 +190,15 @@ protected:
 					while (segmentStart > 0 && energy[segmentStart] > smoothedEnergy[segmentStart]*0.25f) {
 						--segmentStart;
 					}
-				
 					// extend this segment back and the previous one forwards
 					int midPoint = (segmentStart + prevSegmentEnd)/2;
 					// copy the previous segment across
 					copySegmentToNew(prevSegmentStart, midPoint);
 					prevSegmentStart = midPoint;
 				}
-				
 				// and extend forward until it's 6dB below the smoothed energy
 				int segmentEnd = binIndex + 1;
-				while (segmentEnd < this->bands() && energy[segmentEnd] > smoothedEnergy[segmentEnd]*0.25f) {
+				while (segmentEnd < bandCount && energy[segmentEnd] > smoothedEnergy[segmentEnd]*0.25f) {
 					++segmentEnd;
 				}
 				prevSegmentEnd = binIndex = segmentEnd;
@@ -315,31 +207,21 @@ protected:
 			}
 		}
 		// Extend final band to the end, and copy it in
-		copySegmentToNew(prevSegmentStart, this->bands());
+		copySegmentToNew(prevSegmentStart, bandCount);
 		
 		// Copy the new spectrum across
+		//Potenzialmente parallelizzabile in SIMD
 		for (int c = 0; c < this->channels; ++c) {
-			Complex *spectrum = this->channelSpectrum(c);
-			Complex *newSpectrum = newChannelSpectrum(c);
-			Complex *prevSpectrum = prevChannelSpectrum(c);
-			for (int b = 0; b < this->bands(); ++b) {
+			Complex *spectrum = &channelSpectra[c*bandCount];
+			Complex *newSpectrum = &newSpectra[c*bandCount];
+			Complex *prevSpectrum = &prevSpectra[c*bandCount];
+			for (int b = 0; b < bandCount; ++b) {
 				spectrum[b] = newSpectrum[b];
 				newSpectrum[b] = 0;
 				prevSpectrum[b] = spectrum[b]*prevOutputRotations[b];
 			}
 		}
 	}
-private:
-	double freqFactor = 1;
-	Sample *energy, *smoothedEnergy;
-	Complex* newSpectra, *prevSpectra;
-	Complex * newChannelSpectrum(int channel) {
-		return &newSpectra[channel*this->bands()];
-	}
-	Complex * prevChannelSpectrum(int channel) {
-		return &prevSpectra[channel*this->bands()];
-	}
-	Complex* prevOutputRotations;
 	
 	// Copy a segment of the spectrum to the output spectrum, shifted in frequency
 	void copySegmentToNew(int segmentStart, int segmentEnd) {
@@ -350,32 +232,32 @@ private:
 			energyTotal += energy[b];
 		}
 		double binAverage = binTotal/(energyTotal + 1e-100);
-		Sample centreFreq = this->bandToFreq(binAverage);
-		Sample newCentreFreq = centreFreq*freqFactor;
-		int binOffset = std::round(this->freqToBand(newCentreFreq) - binAverage);
+		double centreFreq = (binAverage+0.5f)/mrfft.size();//this->bandToFreq(binAverage);
+		double newCentreFreq = centreFreq*freqFactor;
+		int binOffset = std::round(newCentreFreq*mrfft.size() - 0.5f - binAverage); //freqToBand(newCentreFreq)
 
 		Complex phaseShift = 1;
 		Complex phaseShiftSum = 0;
 		for (int c = 0; c < this->channels; ++c) {
-			Complex *spectrum = this->channelSpectrum(c);
-			Complex *prevSpectrum = prevChannelSpectrum(c);
+			Complex *spectrum = &channelSpectra[c*bandCount];
+			Complex *prevSpectrum = &prevSpectra[c*bandCount];
 			for (int b = segmentStart; b < segmentEnd; ++b) {
 				int newB = b + binOffset;
-				if (newB > 0 && newB < this->bands()) {
+				if (newB > 0 && newB < bandCount) {
 					phaseShiftSum += prevSpectrum[newB]*std::conj(spectrum[b]);
 				}
 			}
 		}
-		Sample norm = std::norm(phaseShiftSum);
+		double norm = std::norm(phaseShiftSum);
 		if (norm > 0) {
 			phaseShift = phaseShiftSum/std::sqrt(norm);
 		}
 		for (int c = 0; c < this->channels; ++c) {
-			Complex *spectrum = this->channelSpectrum(c);
-			Complex *newSpectrum = newChannelSpectrum(c);
+			Complex *spectrum = &channelSpectra[c*bandCount];
+			Complex *newSpectrum = &newSpectra[c*bandCount];
 			for (int b = segmentStart; b < segmentEnd; ++b) {
 				int newB = b + binOffset;
-				if (newB > 0 && newB < this->bands()) {
+				if (newB > 0 && newB < bandCount) {
 					newSpectrum[newB] += spectrum[b]*phaseShift;
 				}
 			}
@@ -383,4 +265,4 @@ private:
 	}
 };
 
-#endif // include guard
+#endif
