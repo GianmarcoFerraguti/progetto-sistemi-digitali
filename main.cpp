@@ -8,34 +8,48 @@
 #else
 #include <x86intrin.h>
 #endif // _WIN32
+void pitchShifter(char* inputFile, char* outputFile, double semitones) {
+	Wav inputWav, outputWav;
+	double timeFactor = 1, freqFactor = 1;
+	double blockMs = 80, overlapFactor = 4;
+	long startTime, endTime;
+	if (!inputWav.read(inputFile)) 
+	{
+		printf(inputWav.result.reason.c_str());
+		exit(-1);
+	}
+	outputWav.channels = inputWav.channels;
+	outputWav.sampleRate = inputWav.sampleRate;
+	startTime=__rdtsc();
+	freqFactor = pow(2,semitones/12);
+	int blockSamples = int(blockMs*0.001*inputWav.sampleRate + 0.5);
+	int intervalSamples = int(blockSamples/overlapFactor);
+	SpectralCutStretch stretch; //Default constructor
+	stretch.configure(inputWav.channels, blockSamples, intervalSamples);
+	stretch.setTimeFactor(timeFactor);
+	stretch.setFreqFactor(freqFactor);
 
-Wav inputWav, outputWav;
-
-template<class Processor>
-void processBlocks(Processor &processor, double stretchFactor) {
 	int channels = inputWav.channels;
 	int blockSize = 256;
 	
 	std::vector<std::vector<double>> inputBuffers(channels), outputBuffers(channels);
 	std::vector<double *> inputPointers(channels), outputPointers(channels);
-	for (auto &b : outputBuffers) b.resize(blockSize);
+	for (auto &b : outputBuffers) 
+		b.resize(blockSize);
 	
 	outputWav.channels = inputWav.channels;
 	int inputOffset = 0, outputOffset = 0;
 	int inputLength = int(inputWav.length());
-	int totalLatency = std::round(processor.inputLatency()*stretchFactor + processor.outputLatency());
-	int outputLength = inputWav.length()*stretchFactor;
+	int totalLatency = std::round(stretch.inputLatency()*timeFactor + stretch.outputLatency());
+	int outputLength = inputWav.length()*timeFactor;
 	while (outputOffset < outputLength + totalLatency*2) {
-		// For `blockSize` output samples, how many input samples should we have?
-		int inputSamples = processor.samplesForOutput(blockSize);
-		// Make sure our input buffers are large enough
+		int inputSamples = int(std::ceil(blockSize*stretch.invTimeFactor - stretch.surplusInputSamples));
 		if (inputSamples > int(inputBuffers[0].size())) {
-			for (auto &b : inputBuffers) b.resize(inputSamples);
+			for (auto &b : inputBuffers) 
+				b.resize(inputSamples);
 		}
-		// Fill them up
 		for (int c = 0; c < channels; ++c) {
 			for (int i = 0; i < inputSamples; ++i) {
-				// Fill input either from WAV, or with 0
 				if (inputOffset + i < inputLength) {
 					inputBuffers[c][i] = inputWav[c][inputOffset + i];
 				} else {
@@ -46,7 +60,7 @@ void processBlocks(Processor &processor, double stretchFactor) {
 			outputPointers[c] = outputBuffers[c].data();
 		}
 		
-		processor.process(inputPointers.data(), inputSamples, outputPointers.data(), blockSize);
+		stretch.process(inputPointers.data(), inputSamples, outputPointers.data(), blockSize);
 		
 		outputWav.samples.resize((outputOffset + blockSize)*channels);
 		for (int c = 0; c < channels; ++c) {
@@ -58,29 +72,6 @@ void processBlocks(Processor &processor, double stretchFactor) {
 		inputOffset += inputSamples;
 		outputOffset += blockSize;
 	}
-}
-
-void pitchShifter(char* inputFile, char* outputFile, double semitones) {
-	double timeFactor = 1, freqFactor = 1;
-	double blockMs = 80, overlapFactor = 4, searchMs = 10;
-	if (!inputWav.read(inputFile)) 
-	{
-		printf(inputWav.result.reason.c_str());
-		exit(-1);
-	}
-	outputWav.channels = inputWav.channels;
-	outputWav.sampleRate = inputWav.sampleRate;
-	long startTime, endTime;
-	startTime=__rdtsc();
-	freqFactor = pow(2,semitones/12);
-	int blockSamples = int(blockMs*0.001*inputWav.sampleRate + 0.5);
-	int intervalSamples = int(blockSamples/overlapFactor);
-	int searchSamples = int(searchMs*0.001*inputWav.sampleRate + 0.5);
-	SpectralCutStretch stretch; //Default constructor
-	stretch.configure(inputWav.channels, blockSamples, intervalSamples);
-	stretch.setTimeFactor(timeFactor);
-	stretch.setFreqFactor(freqFactor);
-	processBlocks(stretch, timeFactor);
 	endTime=__rdtsc();
 	printf("Tempo impiegato per l'elaborazione (in cicli di clock): %ld\n",(endTime-startTime));
 	if (!outputWav.write(outputFile)) 

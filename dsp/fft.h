@@ -3,22 +3,22 @@
 
 #include <vector>
 #include <complex>
-typedef std::complex<double> complex;
+typedef std::complex<double> Complex;
 
-complex complexMul(bool conjugateSecond, const complex &a, const complex &b) {
-	return conjugateSecond ? complex{
+Complex complexMul(bool conjugateSecond, const Complex &a, const Complex &b) {
+	return conjugateSecond ? Complex{
 		b.real()*a.real() + b.imag()*a.imag(),
 		b.real()*a.imag() - b.imag()*a.real()
-	} : complex{
+	} : Complex{
 		a.real()*b.real() - a.imag()*b.imag(),
 		a.real()*b.imag() + a.imag()*b.real()
 	};
 }
-complex complexAddI(bool flipped, const complex &a, const complex &b) {
-	return flipped ? complex{
+Complex complexAddI(bool flipped, const Complex &a, const Complex &b) {
+	return flipped ? Complex{
 		a.real() + b.imag(),
 		a.imag() - b.real()
-	} : complex{
+	} : Complex{
 		a.real() - b.imag(),
 		a.imag() + b.real()
 	};
@@ -26,7 +26,7 @@ complex complexAddI(bool flipped, const complex &a, const complex &b) {
 	
 class FFT {
 	size_t _size;
-	std::vector<complex> workingVector;
+	std::vector<Complex> workingVector;
 	
 	enum class StepType {
 		generic, step2, step3, step4
@@ -41,7 +41,7 @@ class FFT {
 	};
 	std::vector<size_t> factors;
 	std::vector<Step> plan;
-	std::vector<complex> twiddleVector;
+	std::vector<Complex> twiddleVector;
 	
 	struct PermutationPair {size_t from, to;};
 	std::vector<PermutationPair> permutation;
@@ -73,7 +73,7 @@ class FFT {
 			for (size_t i = 0; i < subLength; ++i) {
 				for (size_t f = 0; f < factor; ++f) {
 					double phase = 2*M_PI*i*f/length;
-					complex twiddle = {(std::cos(phase)), (-std::sin(phase))};
+					Complex twiddle = {(std::cos(phase)), (-std::sin(phase))};
 					twiddleVector.push_back(twiddle);
 				}
 			}
@@ -166,24 +166,24 @@ class FFT {
 			return _size;
 		}
 
-	void run(bool inverse, complex *input, complex *data) {
+	void run(bool inverse, Complex *input, Complex *data) {
 		for(auto pair : permutation)
 		{
 			data[pair.from]=input[pair.to];
 		}
 		for (const Step &step : plan) {
 			const size_t stride = step.innerRepeats;
-			const complex *origTwiddles = twiddleVector.data() + step.twiddleIndex;
-			complex* origData = data + step.startIndex;
+			const Complex *origTwiddles = twiddleVector.data() + step.twiddleIndex;
+			Complex* origData = data + step.startIndex;
 			for (size_t outerRepeat = 0; outerRepeat < step.outerRepeats; ++outerRepeat) {
-				const complex* twiddles = origTwiddles;
-				for (complex* data = origData; data < origData + stride; ++data) {
-					complex A = data[0];
-					complex C = complexMul(inverse, data[stride], twiddles[2]);
-					complex B = complexMul(inverse, data[stride*2], twiddles[1]);
-					complex D = complexMul(inverse, data[stride*3], twiddles[3]);
-					complex sumAC = A + C, sumBD = B + D;
-					complex diffAC = A - C, diffBD = B - D;
+				const Complex* twiddles = origTwiddles;
+				for (Complex* data = origData; data < origData + stride; ++data) {
+					Complex A = data[0];
+					Complex C = complexMul(inverse, data[stride], twiddles[2]);
+					Complex B = complexMul(inverse, data[stride*2], twiddles[1]);
+					Complex D = complexMul(inverse, data[stride*3], twiddles[3]);
+					Complex sumAC = A + C, sumBD = B + D;
+					Complex diffAC = A - C, diffBD = B - D;
 					data[0] = sumAC + sumBD;
 					data[stride] = complexAddI(!inverse,diffAC, diffBD);
 					data[stride*2] = sumAC - sumBD;
@@ -196,14 +196,10 @@ class FFT {
 	}
 };
 
-struct FFTOptions {
-	static constexpr int halfFreqShift = 1;
-};
-
 class RealFFT {
 	static const int optionFlags=0;
-	std::vector<complex> complexBuffer1, complexBuffer2;
-	std::vector<complex> twiddlesMinusI;
+	std::vector<Complex> complexBuffer1, complexBuffer2;
+	std::vector<Complex> twiddlesMinusI;
 	FFT complexFft;
 	public:
 		static size_t fastSizeAbove(size_t size) {
@@ -233,7 +229,7 @@ class RealFFT {
 			return complexFft.size()*2;
 		}
 
-		void fft(double *&input, complex *&output) {
+		void fft(double *&input, Complex *&output) {
 			size_t hSize = complexFft.size();
 			for (size_t i = 0; i < hSize; ++i) {
 				complexBuffer1[i] = {input[2*i], input[2*i + 1]};
@@ -247,15 +243,15 @@ class RealFFT {
 			for (size_t i = 1; i <= hSize/2; ++i) {
 				size_t conjI = hSize - i;
 				
-				complex odd = (complexBuffer2[i] + conj(complexBuffer2[conjI]))*0.5;
-				complex evenI = (complexBuffer2[i] - conj(complexBuffer2[conjI]))*0.5;
-				complex evenRotMinusI = complexMul(false, evenI, twiddlesMinusI[i]);
+				Complex odd = (complexBuffer2[i] + conj(complexBuffer2[conjI]))*0.5;
+				Complex evenI = (complexBuffer2[i] - conj(complexBuffer2[conjI]))*0.5;
+				Complex evenRotMinusI = complexMul(false, evenI, twiddlesMinusI[i]);
 
 				output[i] = odd + evenRotMinusI;
 				output[conjI] = conj(odd - evenRotMinusI);
 			}
 		}
-		void ifft(complex *&input, double *&output) {
+		void ifft(Complex *&input, double *&output) {
 			size_t hSize = complexFft.size();
 			complexBuffer1[0] = {
 				input[0].real() + input[0].imag(),
@@ -263,11 +259,11 @@ class RealFFT {
 			};
 			for (size_t i = 1; i <= hSize/2; ++i) {
 				size_t conjI = hSize - i;
-				complex v = input[i], v2 = input[conjI];
+				Complex v = input[i], v2 = input[conjI];
 
-				complex odd = v + conj(v2);
-				complex evenRotMinusI = v - conj(v2);
-				complex evenI = complexMul(true, evenRotMinusI, twiddlesMinusI[i]);
+				Complex odd = v + conj(v2);
+				Complex evenRotMinusI = v - conj(v2);
+				Complex evenI = complexMul(true, evenRotMinusI, twiddlesMinusI[i]);
 				
 				complexBuffer1[i] = odd + evenI;
 				complexBuffer1[conjI] = conj(odd - evenI);
@@ -276,7 +272,7 @@ class RealFFT {
 			complexFft.run(true, complexBuffer1.data(), complexBuffer2.data());
 			
 			for (size_t i = 0; i < hSize; ++i) {
-				complex v = complexBuffer2[i];
+				Complex v = complexBuffer2[i];
 				output[2*i] = v.real();
 				output[2*i + 1] = v.imag();
 			}

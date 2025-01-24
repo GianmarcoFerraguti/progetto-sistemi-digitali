@@ -29,9 +29,8 @@ struct BigEndian {
 		out.write(a, sizeof(a));
 	}
 };
-
+//Vettore in cui si alternano campioni del primo canale a campioni del secondo canale (campo samples)
 class Wav : BigEndian<true> {
-	// Little-endian versions of text values
 	uint32_t value_RIFF = 0x46464952;
 	uint32_t value_WAVE = 0x45564157;
 	uint32_t value_fmt = 0x20746d66;
@@ -152,7 +151,6 @@ public:
 				unsigned int bytesPerFrame = read16(file);
 				unsigned int bitsPerSample = read16(file);
 				if (!formatIsValid(formatInt, bitsPerSample)) return result = Result(Result::Code::UNSUPPORTED, "Unsupported format:bits: " + std::to_string(formatInt) + ":" + std::to_string(bitsPerSample));
-				// Since it's plain WAVE, we can do some extra checks for consistency
 				if (bitsPerSample*channels != bytesPerFrame*8) return result = Result(Result::Code::FORMAT_ERROR, "Format sizes don't add up");
 				if (expectedBytesPerSecond != sampleRate*bytesPerFrame) return result = Result(Result::Code::FORMAT_ERROR, "Format sizes don't add up");
 
@@ -180,7 +178,6 @@ public:
 				this->samples = samples;
 				hasData = true;
 			} else {
-				// We either don't recognise
 				file.ignore(blockLength);
 			}
 		}
