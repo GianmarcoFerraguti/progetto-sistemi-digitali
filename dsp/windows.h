@@ -20,16 +20,13 @@
 			return result;
 		}
 		Kaiser(double beta) : beta(beta), invB0(1/bessel0(beta)) {}
-		static Kaiser withBandwidth(double bandwidth, bool heuristicOptimal=false) {
-			return Kaiser(bandwidthToBeta(bandwidth, heuristicOptimal));
+		static Kaiser withBandwidth(double bandwidth) {
+			return Kaiser(bandwidthToBeta(bandwidth));
 		}
 
-		static double bandwidthToBeta(double bandwidth, bool heuristicOptimal=false) {
-			if (heuristicOptimal) {
-				//Idea carina ma non essenziale: raggruppare alcuni termini della seguente espressione in un registro esteso in modo da calcolarli contemporanemante
-				bandwidth = bandwidth + 8/((bandwidth + 3)*(bandwidth + 3)) + 0.25*std::max(3 - bandwidth, 0.0); //heuristicBandwidth
-			}
-			bandwidth = std::max(bandwidth, 2.0);
+		static double bandwidthToBeta(double bandwidth) {
+			//Idea carina ma non essenziale: raggruppare alcuni termini della seguente espressione in un registro esteso in modo da calcolarli contemporanemante
+			bandwidth = bandwidth + 8/((bandwidth + 3)*(bandwidth + 3)) + 0.25*std::max(3 - bandwidth, 0.0); //heuristicBandwidth
 			double alpha = std::sqrt(bandwidth*bandwidth*0.25 - 1);
 			return alpha*M_PI;
 		}

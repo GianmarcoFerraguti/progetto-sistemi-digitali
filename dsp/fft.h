@@ -25,9 +25,7 @@ Complex complexAddI(bool flipped, const Complex &a, const Complex &b) {
 }
 	
 class FFT {
-	size_t _size;
-	std::vector<Complex> workingVector;
-	
+	size_t _size;	
 	enum class StepType {
 		generic, step2, step3, step4
 	};
@@ -39,6 +37,7 @@ class FFT {
 		size_t outerRepeats;
 		size_t twiddleIndex;
 	};
+	std::vector<Complex> workingVector;
 	std::vector<size_t> factors;
 	std::vector<Step> plan;
 	std::vector<Complex> twiddleVector;

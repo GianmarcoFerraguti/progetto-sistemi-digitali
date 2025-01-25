@@ -5,16 +5,15 @@
 #include "dsp/fft.h"
 #include "dsp/windows.h"
 #include <complex>
-
-int size[9];
-typedef enum {
-	BLOCK_BUFFERS=0, WINDOW=1, FFT_BUFFER, CHANNEL_SPECTRA, ENERGY, SMOOTHED_ENERGY, PREV_SPECTRA, NEW_SPECTRA, PREV_OUTPUT_ROTATIONS
-} Array_Names;
 typedef std::complex<double> Complex;//using Complex = std::complex<Sample>;
 typedef Complex complex;
 RealFFT mrfft;
 class SpectralCutStretch {
 public:
+	int size[9];
+	typedef enum {
+		BLOCK_BUFFERS=0, WINDOW=1, FFT_BUFFER, CHANNEL_SPECTRA, ENERGY, SMOOTHED_ENERGY, PREV_SPECTRA, NEW_SPECTRA, PREV_OUTPUT_ROTATIONS
+	} Array_Names;
 	int bandCount = 0;
 	double scalingFactor = 1;
 	int channels = 0, blockSamples = 0;
@@ -49,7 +48,7 @@ public:
 		size[WINDOW]=blockSamples;
 		blockBuffers=(double*)malloc(sizeof(double)*size[BLOCK_BUFFERS]);
 		window=(double*)malloc(sizeof(double)*size[WINDOW]);
-		Kaiser kaiser = Kaiser::withBandwidth(blockSamples*1.0/intervalSamples, true);
+		Kaiser kaiser = Kaiser::withBandwidth(blockSamples*1.0/intervalSamples);
 		kaiser.fill(window, blockSamples);
 		// Makes it add up nicely to 1 when applied twice
 		forcePerfectReconstruction(window, blockSamples, intervalSamples);
@@ -60,7 +59,6 @@ public:
 		size[FFT_BUFFER]=mrfft.size();
 		size[CHANNEL_SPECTRA]=bandCount*channels;
 		size[ENERGY]=size[SMOOTHED_ENERGY]=size[NEW_SPECTRA]=size[PREV_SPECTRA]=size[PREV_OUTPUT_ROTATIONS]=bandCount;
-		//Dove si possono deallocare? Quando non servono più o definendo un metodo finalize per dealloare tutto alla fine?
 		fftBuffer=(double*)malloc(sizeof(double)*size[FFT_BUFFER]);
 		channelSpectra=(Complex*)malloc(sizeof(Complex)*size[CHANNEL_SPECTRA]);
 		energy=(double*)malloc(sizeof(double)*bandCount);
@@ -89,7 +87,7 @@ public:
 				for (int c = 0; c < channels; ++c) {
 					// Make sure we have enough input history
 					double* input = inputs[c];
-					Buffer::View history = inputHistory[c];
+					View history(inputHistory.buffer, inputHistory.bufferIndex, inputHistory.bufferMask, c*inputHistory.stride);
 					for (int i = inputFilledTo; i < inputStart + blockSamples; ++i) {
 						history[i] = input[i];
 					}
@@ -107,28 +105,30 @@ public:
 				//Potenzialmente parallelizzabile, a patto di sistemare delay.h come già detto
 				for (int c = 0; c < channels; ++c) {
 					double *blockBuffer = &blockBuffers[c*blockSamples];
-					Buffer::View output = summedOutput[c];
+					View output(summedOutput.buffer, summedOutput.bufferIndex, summedOutput.bufferMask, c*summedOutput.stride);
 					for (int i = 0; i < blockSamples; ++i) {
 						output[i] += blockBuffer[i]*window[i];
 					}
 				}
 			}
+			//Potenzialmente parallelizzabile in
 			for (int c = 0; c < channels; ++c) {
-				outputs[c][o] = summedOutput[c][0];
-				summedOutput[c][0] = 0;
+				View view(summedOutput.buffer, summedOutput.bufferIndex, summedOutput.bufferMask,c * summedOutput.stride);
+				outputs[c][o] = view[0];
+				view[0] = 0;
 			}
-			++summedOutput;
+			summedOutput.bufferIndex++;
 		}
 		
 		// Copy in remaining input
 		for (int c = 0; c < channels; ++c) {
 			double* input = inputs[c];
-			Buffer::View history = inputHistory[c];
+			View history(inputHistory.buffer, inputHistory.bufferIndex, inputHistory.bufferMask, c*inputHistory.stride);
 			for (int i = inputFilledTo; i < inputSamples; ++i) {
 				history[i] = input[i];
 			}
 		}
-		inputHistory += inputSamples;
+		inputHistory.bufferIndex += inputSamples; //buffer.bufferIndex += i;
 		prevInputIndex -= inputSamples;
 		surplusInputSamples += inputSamples - outputSamples*invTimeFactor;
 	}
@@ -238,6 +238,7 @@ public:
 
 		Complex phaseShift = 1;
 		Complex phaseShiftSum = 0;
+		//Probabile possibilità di riscrittura in SIMD
 		for (int c = 0; c < this->channels; ++c) {
 			Complex *spectrum = &channelSpectra[c*bandCount];
 			Complex *prevSpectrum = &prevSpectra[c*bandCount];
@@ -252,6 +253,7 @@ public:
 		if (norm > 0) {
 			phaseShift = phaseShiftSum/std::sqrt(norm);
 		}
+		//Probabile possibilità di riscrittura in SIMD
 		for (int c = 0; c < this->channels; ++c) {
 			Complex *spectrum = &channelSpectra[c*bandCount];
 			Complex *newSpectrum = &newSpectra[c*bandCount];
@@ -262,6 +264,18 @@ public:
 				}
 			}
 		}
+	}
+	void finalize()
+	{
+		free(fftBuffer);
+		free(blockBuffers);
+		free(window);
+		free(channelSpectra);
+		free(energy);
+		free(smoothedEnergy);
+		free(newSpectra);
+		free(prevSpectra);
+		free(prevOutputRotations);
 	}
 };
 

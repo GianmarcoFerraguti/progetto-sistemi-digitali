@@ -8,6 +8,7 @@
 #else
 #include <x86intrin.h>
 #endif // _WIN32
+//Cosa da provare a fare in generale: sostituire double (FP64) con un tipo più leggero come float (FP32) o FP16
 void pitchShifter(char* inputFile, char* outputFile, double semitones) {
 	Wav inputWav, outputWav;
 	double timeFactor = 1, freqFactor = 1;
@@ -69,6 +70,7 @@ void pitchShifter(char* inputFile, char* outputFile, double semitones) {
 		inputOffset += inputSamples;
 		outputOffset += blockSize;
 	}
+	stretch.finalize();
 	for(int c=0; c<channels; c++)
 	{
 		free(outputBuffers[c]);
