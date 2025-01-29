@@ -31,7 +31,7 @@ void pitchShifter(char* inputFile, char* outputFile, double semitones) {
 	stretch.freqFactor=freqFactor;
 
 	int blockSize = 256;
-	int inputSamples = int(std::ceil(blockSize*stretch.invTimeFactor - stretch.surplusInputSamples));
+	int inputSamples = int(std::ceil(blockSize*stretch.invTimeFactor));
 	int channels = inputWav.channels;
 	double** inputBuffers, **outputBuffers, **inputPointers, **outputPointers;
 	inputBuffers=(double**)malloc(sizeof(double*)*channels);

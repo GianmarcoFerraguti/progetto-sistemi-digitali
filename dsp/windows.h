@@ -1,6 +1,6 @@
 #ifndef SIGNALSMITH_DSP_WINDOWS_H
 #define SIGNALSMITH_DSP_WINDOWS_H
-
+#include <math.h>
 	class Kaiser {
 	public:
 		double beta;

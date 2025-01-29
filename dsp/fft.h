@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <complex>
+#include "complex_ops.h"
 typedef std::complex<double> Complex;
 //Due idee: ottimizzazione di questo codice oppure impiego al suo posto della libreria FFTW
 Complex complexMul(bool conjugateSecond, const Complex &a, const Complex &b) {
@@ -228,7 +229,7 @@ class RealFFT {
 			return complexFft.size()*2;
 		}
 
-		void fft(double *&input, Complex *&output) {
+		void fft(double *input, Complex* output) {
 			size_t hSize = complexFft.size();
 			for (size_t i = 0; i < hSize; ++i) {
 				complexBuffer1[i] = {input[2*i], input[2*i + 1]};
@@ -250,7 +251,7 @@ class RealFFT {
 				output[conjI] = conj(odd - evenRotMinusI);
 			}
 		}
-		void ifft(Complex *&input, double *&output) {
+		void ifft(Complex *input, double *&output) {
 			size_t hSize = complexFft.size();
 			complexBuffer1[0] = {
 				input[0].real() + input[0].imag(),

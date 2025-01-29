@@ -3,11 +3,8 @@
 #define M_PI 3.14159265358979323846264338327950288
 #include "dsp/delay.h"
 #include "dsp/fft.h"
+#include "dsp/complex_ops.h"
 #include "dsp/windows.h"
-#include <complex>
-typedef std::complex<double> Complex;//using Complex = std::complex<Sample>;
-typedef Complex complex;
-RealFFT mrfft;
 class SpectralCutStretch {
 public:
 	int size[9];
@@ -29,9 +26,10 @@ public:
 	double* fftBuffer;
 	double *energy, *smoothedEnergy;
 	double* blockBuffers, *window;
-	Complex* channelSpectra;
-	Complex* newSpectra, *prevSpectra;
-	Complex* prevOutputRotations;
+	fftw_complex* channelSpectra;
+	fftw_complex* newSpectra, *prevSpectra;
+	fftw_complex* prevOutputRotations;
+	RealFFT mrfft;
 
 	SpectralCutStretch() {}
 
@@ -53,23 +51,24 @@ public:
 		// Makes it add up nicely to 1 when applied twice
 		intervalCounter = 0;
 		mrfft.setFastSizeAbove(blockSamples*zeroPadding);
+		size[FFT_BUFFER]=mrfft.size();
 		bandCount = mrfft.size()/2;
 		scalingFactor = 1.0/mrfft.size(); // the FFT round-trip scales things up, so we scale down again
-		size[FFT_BUFFER]=mrfft.size();
 		size[CHANNEL_SPECTRA]=bandCount*channels;
 		size[ENERGY]=size[SMOOTHED_ENERGY]=size[NEW_SPECTRA]=size[PREV_SPECTRA]=size[PREV_OUTPUT_ROTATIONS]=bandCount;
 		fftBuffer=(double*)malloc(sizeof(double)*size[FFT_BUFFER]);
-		channelSpectra=(Complex*)malloc(sizeof(Complex)*size[CHANNEL_SPECTRA]);
+		channelSpectra=(fftw_complex*)malloc(sizeof(fftw_complex)*(bandCount*channels));
 		energy=(double*)malloc(sizeof(double)*bandCount);
 		smoothedEnergy=(double*)malloc(sizeof(double)*bandCount);
-		newSpectra=(Complex*)malloc(sizeof(Complex)*(bandCount*channels));
-		prevSpectra=(Complex*)malloc(sizeof(Complex)*(bandCount*channels));
-		prevOutputRotations=(Complex*)malloc(sizeof(Complex)*bandCount);
+		newSpectra=(fftw_complex*)malloc(sizeof(fftw_complex)*(bandCount*channels));
+		prevSpectra=(fftw_complex*)malloc(sizeof(fftw_complex)*(bandCount*channels));
+		prevOutputRotations=(fftw_complex*)malloc(sizeof(fftw_complex)*bandCount);
 
 		//Possibile parallelizzazione in SIMD: due celle per ciascun elemento, una per la parte reale e una per la parte immaginaria
 		for (int b = 0; b < bandCount; ++b) {
-			double phase = ((b+0.5f)/mrfft.size())*(-intervalSamples)*(-2*M_PI);
-			prevOutputRotations[b] = {std::cos(phase), std::sin(phase)};
+			double phase = ((b+0.5f)/size[FFT_BUFFER])*(-intervalSamples)*(-2*M_PI);
+			prevOutputRotations[b][REAL] = std::cos(phase);
+			prevOutputRotations[b][IMAG] = std::sin(phase);
 		}
 	}
 	
@@ -133,9 +132,10 @@ public:
 	}
 
 	void processBlock(int inputIntervalSamples) {
+		Complex* oSpectrum = (Complex*)malloc(sizeof(Complex)*size[FFT_BUFFER]);
 		for (int c = 0; c < this->channels; ++c) {
 			double *block = &blockBuffers[c*blockSamples];
-			Complex *spectrum = &channelSpectra[c*bandCount];
+			fftw_complex *spectrum = &channelSpectra[c*bandCount];
 			for (int i = 0; i < this->blockSamples; ++i) {
 				fftBuffer[i] = block[i];
 			}
@@ -143,15 +143,23 @@ public:
 			for (int i = this->blockSamples; i < size[FFT_BUFFER]; ++i) {
 				fftBuffer[i] = 0;
 			}
-			mrfft.fft(fftBuffer, spectrum);
+			mrfft.fft(fftBuffer, oSpectrum);
+			for(int i = 0; i < size[FFT_BUFFER]/2; i++)
+			{
+				complexCopy(spectrum[i], oSpectrum[i].real(), oSpectrum[i].imag());
+			}
 		}
 
 		processSpectrum(inputIntervalSamples);
 
 		for (int c = 0; c < this->channels; ++c) {
 			double *block = &blockBuffers[c*blockSamples];
-			Complex *spectrum = &channelSpectra[c*bandCount];
-			mrfft.ifft(spectrum, fftBuffer);
+			fftw_complex *spectrum = &channelSpectra[c*bandCount];
+			for(int i = 0; i < size[FFT_BUFFER]; i++)
+			{
+				oSpectrum[i] = std::complex<double>{spectrum[i][REAL], spectrum[i][IMAG]};
+			}
+			mrfft.ifft(oSpectrum, fftBuffer);
 			for (int i = 0; i < this->blockSamples; ++i) {
 				block[i] = fftBuffer[i]*scalingFactor;
 			}
@@ -162,8 +170,9 @@ public:
 		for (int b = 0; b < bandCount; ++b) {
 			double e = 0;
 			for (int c = 0; c < this->channels; ++c) {
-				Complex bin = (channelSpectra+(c*bandCount))[b];
-				e += std::norm(bin); // magnitude squared
+				fftw_complex bin;
+				complexCopy(bin, (channelSpectra+(c*bandCount))[b]);
+				e += bin[REAL] * bin[REAL] + bin[IMAG] * bin[IMAG]; //std::norm(bin); // magnitude squared
 			}
 			energy[b] = smoothedEnergy[b] = e;
 		}
@@ -210,14 +219,18 @@ public:
 		
 		// Copy the new spectrum across
 		//Potenzialmente parallelizzabile in SIMD
+		fftw_complex zero, product;
+		zero[REAL] = 0;
+		zero[IMAG] = 0;
 		for (int c = 0; c < this->channels; ++c) {
-			Complex *spectrum = &channelSpectra[c*bandCount];
-			Complex *newSpectrum = &newSpectra[c*bandCount];
-			Complex *prevSpectrum = &prevSpectra[c*bandCount];
+			fftw_complex *spectrum = &channelSpectra[c*bandCount];
+			fftw_complex *newSpectrum = &newSpectra[c*bandCount];
+			fftw_complex *prevSpectrum = &prevSpectra[c*bandCount];
 			for (int b = 0; b < bandCount; ++b) {
-				spectrum[b] = newSpectrum[b];
-				newSpectrum[b] = 0;
-				prevSpectrum[b] = spectrum[b]*prevOutputRotations[b];
+				complexCopy(spectrum[b], newSpectrum[b]);
+				complexCopy(newSpectrum[b], zero);
+				complexMulmine(false, product, spectrum[b], prevOutputRotations[b]);
+				complexCopy(prevSpectrum[b], product);
 			}
 		}
 	}
@@ -231,35 +244,43 @@ public:
 			energyTotal += energy[b];
 		}
 		double binAverage = binTotal/(energyTotal + 1e-100);
-		double centreFreq = (binAverage+0.5f)/mrfft.size();//this->bandToFreq(binAverage);
+		double centreFreq = (binAverage+0.5f)/size[FFT_BUFFER];//this->bandToFreq(binAverage);
 		double newCentreFreq = centreFreq*freqFactor;
-		int binOffset = std::round(newCentreFreq*mrfft.size() - 0.5f - binAverage); //freqToBand(newCentreFreq)
+		int binOffset = std::round(newCentreFreq*size[FFT_BUFFER] - 0.5f - binAverage); //freqToBand(newCentreFreq)
 
-		Complex phaseShift = 1;
-		Complex phaseShiftSum = 0;
+		fftw_complex phaseShift;
+		phaseShift[REAL] = 1;
+		phaseShift[IMAG] = 0;
+		fftw_complex phaseShiftSum;
+		phaseShiftSum[REAL] = 0;
+		phaseShiftSum[IMAG] = 0;
+		fftw_complex product;
 		//Probabile possibilità di riscrittura in SIMD
 		for (int c = 0; c < this->channels; ++c) {
-			Complex *spectrum = &channelSpectra[c*bandCount];
-			Complex *prevSpectrum = &prevSpectra[c*bandCount];
+			fftw_complex *spectrum = &channelSpectra[c*bandCount];
+			fftw_complex *prevSpectrum = &prevSpectra[c*bandCount];
 			for (int b = segmentStart; b < segmentEnd; ++b) {
 				int newB = b + binOffset;
 				if (newB > 0 && newB < bandCount) {
-					phaseShiftSum += prevSpectrum[newB]*std::conj(spectrum[b]);
+					complexMulmine(true, product, prevSpectrum[newB], spectrum[b]);
+					complexSum(phaseShiftSum, phaseShiftSum, product, false);
 				}
 			}
 		}
-		double norm = std::norm(phaseShiftSum);
+		double norm = phaseShiftSum[REAL] * phaseShiftSum[REAL] + phaseShiftSum[IMAG] * phaseShiftSum[IMAG]; //std::norm(phaseShiftSum);
 		if (norm > 0) {
-			phaseShift = phaseShiftSum/std::sqrt(norm);
+			phaseShift[REAL] = phaseShiftSum[REAL]/std::sqrt(norm);
+			phaseShift[IMAG] = phaseShiftSum[IMAG]/std::sqrt(norm);
 		}
 		//Probabile possibilità di riscrittura in SIMD
 		for (int c = 0; c < this->channels; ++c) {
-			Complex *spectrum = &channelSpectra[c*bandCount];
-			Complex *newSpectrum = &newSpectra[c*bandCount];
+			fftw_complex *spectrum = &channelSpectra[c*bandCount];
+			fftw_complex *newSpectrum = &newSpectra[c*bandCount];
 			for (int b = segmentStart; b < segmentEnd; ++b) {
 				int newB = b + binOffset;
 				if (newB > 0 && newB < bandCount) {
-					newSpectrum[newB] += spectrum[b]*phaseShift;
+					complexMulmine(false, product, spectrum[b], phaseShift);
+					complexSum(newSpectrum[newB], newSpectrum[newB], product, false);
 				}
 			}
 		}
