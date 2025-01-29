@@ -41,18 +41,4 @@
 			}
 		}
 	};
-
-	void forcePerfectReconstruction(double *&data, int windowLength, int interval) {
-		//Si potrebbe riscrivere in SIMD
-		for (int i = 0; i < interval; ++i) {
-			double sum2 = 0;
-			for (int index = i; index < windowLength; index += interval) {
-				sum2 += data[index]*data[index];
-			}
-			double factor = 1/std::sqrt(sum2);
-			for (int index = i; index < windowLength; index += interval) {
-				data[index] *= factor;
-			}
-		}
-	}
 #endif
