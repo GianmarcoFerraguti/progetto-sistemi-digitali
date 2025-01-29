@@ -51,7 +51,6 @@ public:
 		Kaiser kaiser = Kaiser::withBandwidth(blockSamples*1.0/intervalSamples);
 		kaiser.fill(window, blockSamples);
 		// Makes it add up nicely to 1 when applied twice
-		forcePerfectReconstruction(window, blockSamples, intervalSamples);
 		intervalCounter = 0;
 		mrfft.setFastSizeAbove(blockSamples*zeroPadding);
 		bandCount = mrfft.size()/2;
