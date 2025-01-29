@@ -4,18 +4,19 @@
 #include <vector>
 #include <complex>
 #include "complex_ops.h"
-typedef std::complex<double> Complex;
+typedef std::complex<__bfloat16> Complex;
 //Due idee: ottimizzazione di questo codice oppure impiego al suo posto della libreria FFTW
-Complex complexMul(bool conjugateSecond, const Complex &a, const Complex &b) {
-	return conjugateSecond ? Complex{
+Complex complexMul(bool conjugateSecond, Complex a, Complex b) {
+	Complex res = conjugateSecond ? Complex{
 		b.real()*a.real() + b.imag()*a.imag(),
 		b.real()*a.imag() - b.imag()*a.real()
 	} : Complex{
 		a.real()*b.real() - a.imag()*b.imag(),
 		a.real()*b.imag() + a.imag()*b.real()
 	};
+	return res;
 }
-Complex complexAddI(bool flipped, const Complex &a, const Complex &b) {
+Complex complexAddI(bool flipped, Complex a, Complex b) {
 	return flipped ? Complex{
 		a.real() + b.imag(),
 		a.imag() - b.real()
@@ -72,8 +73,10 @@ class FFT {
 		if (!foundStep) {
 			for (size_t i = 0; i < subLength; ++i) {
 				for (size_t f = 0; f < factor; ++f) {
-					double phase = 2*M_PI*i*f/length;
-					Complex twiddle = {(std::cos(phase)), (-std::sin(phase))};
+					__bfloat16 phase = 2*M_PI*i*f/length;
+					Complex twiddle;
+					twiddle.real(std::cos((float)phase));
+					twiddle.imag(-std::sin((float)phase));
 					twiddleVector.push_back(twiddle);
 				}
 			}
@@ -217,8 +220,9 @@ class RealFFT {
 			size_t hhSize = size/4 + 1;
 			twiddlesMinusI.resize(hhSize);
 			for (size_t i = 0; i < hhSize; ++i) {
-				double rotPhase = -2*M_PI*i/size;
-				twiddlesMinusI[i] = {std::sin(rotPhase), -std::cos(rotPhase)};
+				__bfloat16 rotPhase = -2*M_PI*i/size;
+				twiddlesMinusI[i].real(std::sin((float)rotPhase));
+				twiddlesMinusI[i].imag(-std::cos((float)rotPhase));
 			}			
 			return complexFft.setSize(size/2);
 		}
@@ -229,7 +233,7 @@ class RealFFT {
 			return complexFft.size()*2;
 		}
 
-		void fft(double *input, Complex* output) {
+		void fft(__bfloat16 *input, Complex* output) {
 			size_t hSize = complexFft.size();
 			for (size_t i = 0; i < hSize; ++i) {
 				complexBuffer1[i] = {input[2*i], input[2*i + 1]};
@@ -243,15 +247,15 @@ class RealFFT {
 			for (size_t i = 1; i <= hSize/2; ++i) {
 				size_t conjI = hSize - i;
 				
-				Complex odd = (complexBuffer2[i] + conj(complexBuffer2[conjI]))*0.5;
-				Complex evenI = (complexBuffer2[i] - conj(complexBuffer2[conjI]))*0.5;
+				Complex odd = (complexBuffer2[i] + conj(complexBuffer2[conjI]))*(__bfloat16)0.5;
+				Complex evenI = (complexBuffer2[i] - conj(complexBuffer2[conjI]))*(__bfloat16)0.5F;
 				Complex evenRotMinusI = complexMul(false, evenI, twiddlesMinusI[i]);
 
 				output[i] = odd + evenRotMinusI;
 				output[conjI] = conj(odd - evenRotMinusI);
 			}
 		}
-		void ifft(Complex *input, double *&output) {
+		void ifft(Complex *input, __bfloat16 *&output) {
 			size_t hSize = complexFft.size();
 			complexBuffer1[0] = {
 				input[0].real() + input[0].imag(),

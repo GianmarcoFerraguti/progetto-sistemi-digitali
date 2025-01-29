@@ -3,14 +3,14 @@
 #include <math.h>
 	class Kaiser {
 	public:
-		double beta;
-		double invB0;
+		__bfloat16 beta;
+		__bfloat16 invB0;
 
-		inline static double bessel0(double x) {
-			const double significanceLimit = 1e-4;
-			double result = 0;
-			double term = 1;
-			double m = 0;
+		inline static __bfloat16 bessel0(__bfloat16 x) {
+			const __bfloat16 significanceLimit = 1e-4;
+			__bfloat16 result = 0;
+			__bfloat16 term = 1;
+			__bfloat16 m = 0;
 			while (term > significanceLimit) {
 				result += term;
 				++m;
@@ -19,24 +19,24 @@
 
 			return result;
 		}
-		Kaiser(double beta) : beta(beta), invB0(1/bessel0(beta)) {}
-		static Kaiser withBandwidth(double bandwidth) {
+		Kaiser(__bfloat16 beta) : beta(beta), invB0(1/bessel0(beta)) {}
+		static Kaiser withBandwidth(__bfloat16 bandwidth) {
 			return Kaiser(bandwidthToBeta(bandwidth));
 		}
 
-		static double bandwidthToBeta(double bandwidth) {
+		static __bfloat16 bandwidthToBeta(__bfloat16 bandwidth) {
 			//Idea carina ma non essenziale: raggruppare alcuni termini della seguente espressione in un registro esteso in modo da calcolarli contemporanemante
-			bandwidth = bandwidth + 8/((bandwidth + 3)*(bandwidth + 3)) + 0.25*std::max(3 - bandwidth, 0.0); //heuristicBandwidth
-			double alpha = std::sqrt(bandwidth*bandwidth*0.25 - 1);
+			bandwidth = bandwidth + 8/((bandwidth + 3)*(bandwidth + 3)) + 0.25*std::max((float)(3 - bandwidth), 0.0F); //heuristicBandwidth
+			__bfloat16 alpha = std::sqrt((float)(bandwidth*bandwidth*0.25) - 1);
 			return alpha*M_PI;
 		}
 
-		void fill(double *&data, int size) const {
-			double invSize = 1.0/size;
+		void fill(__bfloat16 *&data, int size) const {
+			__bfloat16 invSize = 1.0/size;
 			//Si potrebbe riscrivere in SIMD
 			for (int i = 0; i < size; ++i) {
-				double r = (2*i + 1)*invSize - 1;
-				double arg = std::sqrt(1 - r*r);
+				__bfloat16 r = (2*i + 1)*invSize - 1;
+				__bfloat16 arg = std::sqrt((float)(1 - r*r));
 				data[i] = bessel0(beta*arg)*invB0;
 			}
 		}

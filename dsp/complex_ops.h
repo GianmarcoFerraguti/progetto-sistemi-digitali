@@ -1,14 +1,15 @@
 #ifndef COMPLEX_OPS
 #define COMPLEX_OPS
-#include <fftw3.h>
+#include <immintrin.h>
 #define REAL 0
 #define IMAG 1
+typedef __bfloat16 fftw_complex[2];
 void complexCopy(fftw_complex dest, fftw_complex src)
 {
 	dest[REAL] = src[REAL];
 	dest[IMAG] = src[IMAG];
 }
-void complexCopy(fftw_complex dest, double srcReal, double srcImag)
+void complexCopy(fftw_complex dest, __bfloat16 srcReal, __bfloat16 srcImag)
 {
     dest[REAL] = srcReal;
     dest[IMAG] = srcImag;

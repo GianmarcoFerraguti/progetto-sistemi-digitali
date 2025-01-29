@@ -5,6 +5,7 @@
 #include <iostream>
 #include <fstream>
 #include <cstdint>
+#include <immintrin.h>
 
 // TODO: something better here that doesn't assume little-endian architecture
 template<bool littleEndian=true>
@@ -76,13 +77,13 @@ public:
 	
 	unsigned int sampleRate = 48000;
 	unsigned int channels = 1;
-	std::vector<double> samples;
+	std::vector<__bfloat16> samples;
 	unsigned int length() const {
 		return samples.size()/channels;
 	}
 	template<bool isConst>
 	class ChannelReader {
-		using CSample = typename std::conditional<isConst, const double, double>::type;
+		using CSample = typename std::conditional<isConst, const __bfloat16, __bfloat16>::type;
 		CSample *data;
 		int stride;
 	public:
@@ -102,8 +103,8 @@ public:
 	Result result = Result(Result::Code::OK);
 
 	Wav() {}
-	Wav(double sampleRate, int channels) : sampleRate(sampleRate), channels(channels) {}
-	Wav(double sampleRate, int channels, const std::vector<double> &samples) : sampleRate(sampleRate), channels(channels), samples(samples) {}
+	Wav(unsigned int sampleRate, int channels) : sampleRate(sampleRate), channels(channels) {}
+	Wav(unsigned int sampleRate, int channels, const std::vector<__bfloat16> &samples) : sampleRate(sampleRate), channels(channels), samples(samples) {}
 	Wav(std::string filename) {
 		result = read(filename).warn();
 	}
@@ -158,7 +159,7 @@ public:
 				file.clear();
 				file.seekg(blockStart);
 			} else if (hasFormat && blockType == value_data) {
-				std::vector<double> samples(0);
+				std::vector<__bfloat16> samples(0);
 				switch (format) {
 				case Format::PCM:
 					samples.reserve(blockLength/2);
@@ -166,9 +167,9 @@ public:
 						uint16_t value = read16(file);
 						if (file.eof()) break;
 						if (value >= 32768) {
-							samples.push_back(((double)value - 65536)/32768);
+							samples.push_back(((__bfloat16)value - 65536)/32768);
 						} else {
-							samples.push_back((double)value/32768);
+							samples.push_back((__bfloat16)value/32768);
 						}
 					}
 				}
@@ -238,7 +239,7 @@ public:
 	}
 	
 	void makeMono() {
-		std::vector<double> newSamples(samples.size()/channels, 0);
+		std::vector<__bfloat16> newSamples(samples.size()/channels, 0);
 		
 		for (size_t channel = 0; channel < channels; ++channel) {
 			for (size_t i = 0; i < newSamples.size(); ++i) {
