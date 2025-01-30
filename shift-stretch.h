@@ -21,8 +21,6 @@ public:
 	double invTimeFactor = 1;
 	
 	MultiBuffer inputHistory, summedOutput;
-	int maxSurplusInputSamples = 0;
-	double surplusInputSamples = 0;
 	int prevInputIndex = 0;
 
 	double freqFactor = 1;
@@ -35,12 +33,11 @@ public:
 
 	SpectralCutStretch() {}
 
-	void configure(int channels, int blockSamples, int intervalSamples, double zeroPadding=2, int maxExtraInput=0) {
+	void configure(int channels, int blockSamples, int intervalSamples, double zeroPadding=2) {
 		//Sono tutti e 4 interi a 32 bit: si potrebbero raggruppare in un registro esteso da 128 bit
 		this->channels = channels;
 		this->blockSamples = blockSamples;
 		this->intervalSamples = intervalSamples;
-		this->maxSurplusInputSamples = maxExtraInput;
 
 		inputHistory.resize(channels, blockSamples + maxExtraInput,0);
 		summedOutput.resize(channels, blockSamples,0);
@@ -81,7 +78,7 @@ public:
 				// Fill the block from the input
 				int inputStart = int(std::round(o*invTimeFactor - surplusInputSamples - blockSamples));
 				// For safety: don't go past the end of the block, or too far in the past
-				inputStart = std::max(std::min(inputStart, inputSamples - blockSamples), -maxSurplusInputSamples - blockSamples);
+				inputStart = std::max(std::min(inputStart, inputSamples - blockSamples), - blockSamples);
 				//Si potrebbe parallelizzare, ma prima occorre togliere l'OOP da delay.h e definire tutto in termini di tipi primitivi
 				for (int c = 0; c < channels; ++c) {
 					// Make sure we have enough input history
@@ -129,7 +126,6 @@ public:
 		}
 		inputHistory.bufferIndex += inputSamples; //buffer.bufferIndex += i;
 		prevInputIndex -= inputSamples;
-		surplusInputSamples += inputSamples - outputSamples*invTimeFactor;
 	}
 
 	void processBlock(int inputIntervalSamples) {
