@@ -2,12 +2,12 @@
 #include "util/wav.h"
 #include <stdio.h>
 #include <math.h>
-#include <immintrin.h>
-//Cosa da provare a fare in generale: sostituire __bfloat16 (FP64) con un tipo più leggero come float (FP32) o FP16
-void pitchShifter(char* inputFile, char* outputFile, __bfloat16 semitones) {
+#include "util/simd_consts.h"
+//Cosa da provare a fare in generale: sostituire float (FP64) con un tipo più leggero come float (FP32) o FP16
+void pitchShifter(char* inputFile, char* outputFile, float semitones) {
 	Wav inputWav, outputWav;
-	__bfloat16 timeFactor = 1, freqFactor = 1;
-	__bfloat16 blockMs = 80, overlapFactor = 4;
+	float timeFactor = 1, freqFactor = 1;
+	float blockMs = 80, overlapFactor = 4;
 	long startTime, endTime;
 	if (!inputWav.read(inputFile)) 
 	{
@@ -17,7 +17,7 @@ void pitchShifter(char* inputFile, char* outputFile, __bfloat16 semitones) {
 	outputWav.channels = inputWav.channels;
 	outputWav.sampleRate = inputWav.sampleRate;
 	startTime=__rdtsc();
-	freqFactor = pow(2,(float)semitones/12);
+	freqFactor = pow(2,semitones/12);
 	int blockSamples = int(blockMs*0.001*inputWav.sampleRate + 0.5);
 	int intervalSamples = int(blockSamples/overlapFactor);
 	SpectralCutStretch stretch; //Default constructor
@@ -26,21 +26,21 @@ void pitchShifter(char* inputFile, char* outputFile, __bfloat16 semitones) {
 	stretch.freqFactor=freqFactor;
 
 	int blockSize = 256;
-	int inputSamples = int(std::ceil(blockSize*(float)stretch.invTimeFactor));
+	int inputSamples = int(std::ceil(blockSize*stretch.invTimeFactor));
 	int channels = inputWav.channels;
-	__bfloat16** inputBuffers, **outputBuffers, **inputPointers, **outputPointers;
-	inputBuffers=(__bfloat16**)malloc(sizeof(__bfloat16*)*channels);
-	outputBuffers=(__bfloat16**)malloc(sizeof(__bfloat16*)*channels);
+	float** inputBuffers, **outputBuffers, **inputPointers, **outputPointers;
+	inputBuffers=(float**)_mm_malloc(sizeof(float*)*channels, AVX_DATA_LANE);
+	outputBuffers=(float**)_mm_malloc(sizeof(float*)*channels, AVX_DATA_LANE);
 	for(int c=0; c<channels; c++)
 	{
-		outputBuffers[c]=(__bfloat16*)malloc(sizeof(__bfloat16)*blockSize);
-		inputBuffers[c]=(__bfloat16*)malloc(sizeof(__bfloat16)*inputSamples);
+		outputBuffers[c]=(float*)malloc(sizeof(float)*blockSize);
+		inputBuffers[c]=(float*)malloc(sizeof(float)*inputSamples);
 	}
 	
 	outputWav.channels = inputWav.channels;
 	int inputOffset = 0, outputOffset = 0;
 	int inputLength = int(inputWav.length());
-	int totalLatency = std::round(stretch.blockSamples/2*(float)timeFactor + (blockSamples - blockSamples/2));
+	int totalLatency = std::round(stretch.blockSamples/2*timeFactor + (blockSamples - blockSamples/2));
 	int outputLength = inputWav.length()*timeFactor;
 	while (outputOffset < outputLength + totalLatency*2) {
 		for (int c = 0; c < channels; ++c) {
