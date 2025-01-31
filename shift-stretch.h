@@ -39,7 +39,7 @@ public:
 		this->blockSamples = blockSamples;
 		this->intervalSamples = intervalSamples;
 
-		inputHistory.resize(channels, blockSamples + maxExtraInput,0);
+		inputHistory.resize(channels, blockSamples,0);
 		summedOutput.resize(channels, blockSamples,0);
 		size[BLOCK_BUFFERS]=blockSamples*channels;
 		size[WINDOW]=blockSamples;
@@ -76,7 +76,7 @@ public:
 			if (++intervalCounter >= intervalSamples) {
 				intervalCounter = 0;
 				// Fill the block from the input
-				int inputStart = int(std::round(o*invTimeFactor - surplusInputSamples - blockSamples));
+				int inputStart = int(std::round(o*invTimeFactor - blockSamples));
 				// For safety: don't go past the end of the block, or too far in the past
 				inputStart = std::max(std::min(inputStart, inputSamples - blockSamples), - blockSamples);
 				//Si potrebbe parallelizzare, ma prima occorre togliere l'OOP da delay.h e definire tutto in termini di tipi primitivi
